@@ -22,7 +22,7 @@ export function categorizeItem(name: string, count: number = 0, totalKills: numb
     const isEquipment = /\b(\w*sword|scimitar|dagger|mace|axe|spear|\w*bow|helm|helmet|platebody|platelegs|plateskirt|\w*shield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite\w*|defender)\b/i.test(name);
     if (isEquipment) return "Weapons & Armour";
 
-    const isFood = /\b(raw|tuna|trout|salmon|shrimps|beer|cider|ale|kebab)\b/i.test(name);
+    const isFood = /\b(raw|tuna|trout|salmon|shrimps|beer|cider|ale|kebab|anchovies)\b/i.test(name);
     if (isFood) return "Food";
 
     const isBurntFood = /\b(burnt)\b/i.test(name);

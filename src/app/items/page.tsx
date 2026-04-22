@@ -50,8 +50,9 @@ export default function ItemsPage() {
 
                 data.forEach((row: DatabaseRow) => {
                     const log = row.log_data;
+                    const ALLOWED_ITEM_ACTIONS = [null, 'GATHER_GAIN', 'PICKUP'];
 
-                    if (log.action && ['BANK_SNAPSHOT', 'BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'CONSUME', 'DESTROY', 'DROP', 'PICKUP'].includes(log.action)) {
+                    if (log.action !== undefined && !ALLOWED_ITEM_ACTIONS.includes(log.action)) {
                         return;
                     }
 

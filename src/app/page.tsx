@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, {useState, useEffect} from 'react';
+import {useRouter} from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@supabase/supabase-js';
+import {createClient} from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -19,15 +19,15 @@ interface DatabaseRow {
 export default function HomePage() {
     const router = useRouter();
     const [searchInput, setSearchInput] = useState("");
-    const [recentSources, setRecentSources] = useState<{name: string, category: string}[]>([]);
+    const [recentSources, setRecentSources] = useState<{ name: string, category: string }[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
         async function fetchRecent() {
-            const { data, error } = await supabase
+            const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .order('id', { ascending: false })
+                .order('id', {ascending: false})
                 .limit(100);
 
             if (error) {
@@ -36,8 +36,9 @@ export default function HomePage() {
                 const uniqueSources = new Map<string, string>();
                 data.forEach((row: DatabaseRow) => {
                     const source = row.log_data?.source;
-                    const category = row.log_data?.category || 'Combat'; // Fallback to combat
-                    if (source && source !== "Pickup" && source !== "Unknown/Pickup") {
+                    const category = row.log_data?.category || 'Combat';
+
+                    if (source && !["Pickup", "Unknown/Pickup", "None", "Bank"].includes(source)) {
                         if (!uniqueSources.has(source)) {
                             uniqueSources.set(source, category);
                         }
@@ -45,22 +46,43 @@ export default function HomePage() {
                 });
 
                 const formattedSources = Array.from(uniqueSources.entries())
-                    .map(([name, category]) => ({ name, category }))
+                    .map(([name, category]) => ({name, category}))
                     .slice(0, 8);
 
                 setRecentSources(formattedSources);
             }
             setIsLoading(false);
         }
+
         fetchRecent();
     }, []);
 
-    const handleSearch = (e: React.FormEvent) => {
+    const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!searchInput.trim()) return;
-        const targetUrl = searchInput.trim().replace(/ /g, '_');
-        // Defaulting search to monsters since we can't easily guess category from text
-        router.push(`/monsters/${targetUrl}`);
+        const trimmed = searchInput.trim();
+        if (!trimmed) return;
+
+        const urlSlug = trimmed.replace(/ /g, '_');
+
+        const {data} = await supabase
+            .from('loot_logs')
+            .select('log_data->>category')
+            .ilike('log_data->>source', trimmed)
+            .limit(1);
+
+        if (data && data.length > 0) {
+            const category = data[0].category;
+
+            if (category === 'Skilling') {
+                router.push(`/skilling/${urlSlug}`);
+            } else {
+                router.push(`/monsters/${urlSlug}`);
+            }
+        } else {
+            router.push(`/items/${urlSlug}`);
+        }
+
+        setSearchInput("");
     };
 
     return (
@@ -91,23 +113,32 @@ export default function HomePage() {
                 </button>
             </form>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl mb-16">
-                <Link href="/monsters"
-                      className="h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                    <span className="group-hover:text-[#cca052]">Monsters</span>
-                </Link>
-                <Link href="/skilling"
-                      className="h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                    <span className="group-hover:text-[#cca052]">Skilling</span>
-                </Link>
-                <Link href="/items"
-                      className="h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                    <span className="group-hover:text-[#cca052]">Items</span>
-                </Link>
-                <Link href="/bank"
-                      className="md:col-start-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                    <span className="group-hover:text-[#cca052]">Bank</span>
-                </Link>
+            <div className="w-full max-w-4xl mb-16">
+                <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
+                    {/* TOP ROW */}
+                    <Link href="/monsters"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        <span className="group-hover:text-[#cca052]">Monsters</span>
+                    </Link>
+                    <Link href="/skilling"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        <span className="group-hover:text-[#cca052]">Skilling</span>
+                    </Link>
+                    <Link href="/items"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        <span className="group-hover:text-[#cca052]">Items Log</span>
+                    </Link>
+
+                    {/* BOTTOM ROW */}
+                    <Link href="/bank"
+                          className="md:col-start-2 md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        <span className="group-hover:text-[#cca052]">Live Bank</span>
+                    </Link>
+                    <Link href="/combat"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        <span className="group-hover:text-[#cca052]">Combat & XP</span>
+                    </Link>
+                </div>
             </div>
 
             <div className="w-full max-w-4xl">

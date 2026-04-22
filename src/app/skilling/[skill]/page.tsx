@@ -58,6 +58,8 @@ export default function IndividualSkillPage({params}: { params: Promise<{ skill:
                     if (log.items && log.items.length > 0) {
                         actions++;
                         log.items.forEach((item) => {
+                            if (item.id <= 0) return;
+
                             const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
 
                             if (!resMap[name]) {
@@ -65,7 +67,6 @@ export default function IndividualSkillPage({params}: { params: Promise<{ skill:
                             }
 
                             resMap[name].qty += item.qty;
-                            // Calculate total XP gained from this specific resource
                             resMap[name].xp += (XP_MAP[name] || 0) * item.qty;
                         });
                     }

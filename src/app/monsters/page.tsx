@@ -16,15 +16,16 @@ export default function MonstersHub() {
         async function fetchMonsters() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
+            const { data, error } = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .eq('log_data->>category', 'Combat'); // Only fetch combat logs!
+                .is('log_data->>action', null)
+                .neq('log_data->>source', 'None')
+                .order('id', { ascending: false });
 
             if (error) console.error("Database Error:", error);
 
             if (data) {
-                // Count total kills per monster
                 const stats = data.reduce((acc: Record<string, number>, row: any) => {
                     const source = row.log_data.source;
                     if (source && !source.toLowerCase().includes('pickup')) {
