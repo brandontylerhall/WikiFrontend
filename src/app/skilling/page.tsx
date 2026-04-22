@@ -7,29 +7,7 @@ import Link from 'next/link';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-// THE SYNCED XP DICTIONARY (Now includes Fishing!)
-const XP_MAP: Record<string, number> = {
-    // Woodcutting
-    "Logs": 25, "Oak logs": 37.5, "Willow logs": 67.5, "Teak logs": 85,
-    "Maple logs": 100, "Mahogany logs": 125, "Yew logs": 175, "Magic logs": 250,
-    // Mining
-    "Copper ore": 17.5, "Tin ore": 17.5, "Iron ore": 35, "Coal": 50,
-    // Fishing (With singular safety nets)
-    "Raw shrimps": 10, "Raw shrimp": 10, "Shrimps": 10,
-    "Raw sardine": 20, "Raw herring": 30, "Raw anchovies": 40, "Raw anchovy": 40,
-    "Raw trout": 50, "Raw pike": 60, "Raw salmon": 90, "Raw tuna": 80,
-    "Raw lobster": 90, "Raw swordfish": 100, "Raw shark": 110
-};
-
-// THE SYNCED LEGACY ID MAP
-const LEGACY_ID_MAP: Record<number, string> = {
-    1511: "Logs", 1521: "Oak logs", 1519: "Willow logs", 1515: "Yew logs", 1513: "Magic logs",
-    436: "Copper ore", 438: "Tin ore", 440: "Iron ore", 453: "Coal",
-    317: "Raw shrimps", 321: "Raw anchovies", 327: "Raw sardine", 345: "Raw herring",
-    335: "Raw trout", 331: "Raw salmon", 349: "Raw pike", 359: "Raw tuna",
-    371: "Raw swordfish", 377: "Raw lobster"
-};
+import {LEGACY_ID_MAP, XP_MAP} from '@/lib/constants';
 
 export default function SkillingHub() {
     const [skillTotals, setSkillTotals] = useState<Record<string, number>>({});

@@ -2,22 +2,12 @@
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
+import {LEGACY_ID_MAP} from '@/lib/constants';
+import { categorizeItem, CATEGORY_ORDER } from '@/lib/utils';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-const LEGACY_ID_MAP: Record<number, string> = {
-    1511: "Logs", 1521: "Oak logs", 1519: "Willow logs", 1515: "Yew logs", 1513: "Magic logs",
-    436: "Copper ore", 438: "Tin ore", 440: "Iron ore", 453: "Coal",
-    317: "Raw shrimps", 321: "Raw anchovies", 327: "Raw sardine", 345: "Raw herring",
-    335: "Raw trout", 331: "Raw salmon", 349: "Raw pike", 359: "Raw tuna",
-    371: "Raw swordfish", 377: "Raw lobster",
-    995: "Coins", 592: "Ashes", 526: "Bones", 532: "Big bones", 554: "Fire rune",
-    562: "Chaos rune", 560: "Death rune", 1333: "Rune scimitar", 1163: "Rune full helm",
-    1061: "Leather boots", 333: "Trout", 9005: "Fancy boots", 9006: "Fighter boots",
-    314: "Feather"
-};
 
 interface ProcessedItem {
     name: string;
@@ -26,43 +16,20 @@ interface ProcessedItem {
     unitHa: number;
 }
 
-// YOUR REGEX SORTER IS BACK!
-function categorizeCollectionItem(name: string): string {
-    if (name === "Coins") return "Currencies";
-
-    if (/\b(bones|ashes)\b/i.test(name)) return "Bones & Ashes";
-
-    if (/\b(clue scroll|ensouled|totem|champion scroll|key|long bone|curved bone|shard|brimstone|larran's)\b/i.test(name)) return "Tertiary & Keys";
-
-    if (/\b(uncut|diamond|ruby|emerald|sapphire|loop half|tooth half|dragon spear|shield left half)\b/i.test(name)) return "Rare Drop Table & Gems";
-
-    if (/\b(grimy|seed|spore)\b/i.test(name)) return /\b(grimy)\b/i.test(name) ? "Herbs" : "Seeds";
-
-    const isRune = /\b(air|water|earth|fire|mind|body|cosmic|chaos|nature|law|death|blood|soul|astral|wrath|mud|lava|steam|dust|smoke|mist)\s+rune\b/i.test(name);
-    const isAmmo = /\b(arrow|arrows|bolt|bolts|dart|darts|javelin|javelins)\b/i.test(name);
-    if (isRune || isAmmo) return "Runes & Ammunition";
-
-    const isEquipment = /\b(sword|scimitar|dagger|mace|axe|spear|bow|helm|helmet|platebody|platelegs|plateskirt|shield|kiteshield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite|defender)\b/i.test(name);
-    if (isEquipment) return "Weapons & Armour";
-
-    const isFood = /\b(raw|tuna|trout|salmon)\b/i.test(name);
-    if (isFood) return "Food";
-
-    const isTalisman = /\b(talisman)\b/i.test(name);
-    if (isTalisman) return "Talismans";
-
-    const isResource = /\b(log|logs|ore|coal|seaweed|oyster|cowhide)\b/i.test(name);
-    if (isResource) return "Raw Resources";
-
-    return "Other Loot";
+interface LogItem {
+    id: number;
+    name?: string;
+    qty: number;
+    GE?: number;
+    HA?: number;
 }
 
-// Preferred display order for the UI
-const CATEGORY_ORDER = [
-    "Currencies", "Weapons & Armour", "Runes & Ammunition", "Raw Resources", "Talismans",
-    "Food", "Bones & Ashes", "Herbs", "Seeds", "Rare Drop Table & Gems",
-    "Tertiary & Keys", "Other Loot"
-];
+interface DatabaseRow {
+    log_data: {
+        action?: string;
+        items?: LogItem[];
+    };
+}
 
 export default function ItemsPage() {
     const [categories, setCategories] = useState<Record<string, ProcessedItem[]>>({});
@@ -81,16 +48,15 @@ export default function ItemsPage() {
             if (data) {
                 const itemMap: Record<string, ProcessedItem> = {};
 
-                data.forEach((row: any) => {
+                data.forEach((row: DatabaseRow) => {
                     const log = row.log_data;
 
-                    // BLOCK DOUBLE DIPPING
-                    if (log.action && ['BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'CONSUME', 'DESTROY', 'DROP', 'PICKUP'].includes(log.action)) {
+                    if (log.action && ['BANK_SNAPSHOT', 'BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'CONSUME', 'DESTROY', 'DROP', 'PICKUP'].includes(log.action)) {
                         return;
                     }
 
                     if (log.items) {
-                        log.items.forEach((item: any) => {
+                        log.items.forEach((item: LogItem) => {
                             const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
 
                             if (!itemMap[name]) {
@@ -99,24 +65,24 @@ export default function ItemsPage() {
 
                             itemMap[name].qty += item.qty;
 
-                            // EXTRACT UNIT PRICE ONCE
-                            if (itemMap[name].unitGe === 0 && item.GE > 0) itemMap[name].unitGe = item.GE / item.qty;
-                            if (itemMap[name].unitHa === 0 && item.HA > 0) itemMap[name].unitHa = item.HA / item.qty;
+                            const itemGE = item.GE || 0;
+                            const itemHA = item.HA || 0;
+
+                            if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
+                            if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
                         });
                     }
                 });
 
-                // Dynamically build the categorized object using your regex
                 const categorized: Record<string, ProcessedItem[]> = {};
 
                 Object.values(itemMap).forEach(item => {
-                    // Quick fix for Coins unit price usually being 1 (GE data is often weird for coins)
                     if (item.name === "Coins" && item.unitGe === 0) {
                         item.unitGe = 1;
                         item.unitHa = 1;
                     }
 
-                    const catName = categorizeCollectionItem(item.name);
+                    const catName = categorizeItem(item.name);
 
                     if (!categorized[catName]) {
                         categorized[catName] = [];
@@ -138,7 +104,6 @@ export default function ItemsPage() {
         totalWealth += Math.floor(value);
     });
 
-    // Sort categories based on our preferred order, putting any unexpected ones at the end
     const sortedCategoryKeys = Object.keys(categories).sort((a, b) => {
         const indexA = CATEGORY_ORDER.indexOf(a);
         const indexB = CATEGORY_ORDER.indexOf(b);

@@ -5,38 +5,14 @@ import {createClient} from '@supabase/supabase-js';
 import {useParams, useRouter} from 'next/navigation';
 import Link from 'next/link';
 import regionData from '@/data/regions.json';
+import {LEGACY_ID_MAP} from '@/lib/constants';
+import { categorizeItem, CATEGORY_ORDER } from '@/lib/utils';
 
 const regionDictionary: Record<string, string> = regionData;
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-const LEGACY_ID_MAP: Record<number, string> = {
-    // Trees
-    1511: "Logs", 1521: "Oak logs", 1519: "Willow logs", 1515: "Yew logs", 1513: "Magic logs",
-    // Ores
-    436: "Copper ore", 438: "Tin ore", 440: "Iron ore", 453: "Coal",
-    // Fish
-    317: "Raw shrimps", 321: "Raw anchovies", 327: "Raw sardine", 345: "Raw herring",
-    335: "Raw trout", 331: "Raw salmon", 349: "Raw pike", 359: "Raw tuna",
-    371: "Raw swordfish", 377: "Raw lobster",
-
-    // THE MISSING COMBAT DROPS
-    995: "Coins",
-    592: "Ashes",
-    526: "Bones",
-    532: "Big bones",
-    554: "Fire rune",
-    562: "Chaos rune",
-    560: "Death rune",
-    1061: "Leather boots",
-    333: "Trout",
-    9005: "Fancy boots",
-    9006: "Fighter boots",
-    12812: "Ironman platelegs",
-    314: "Feather"
-};
 
 // --- INTERFACES ---
 interface AggregatedDrop {
@@ -52,22 +28,21 @@ interface AggregatedLocation {
     count: number;
 }
 
-// THE DISGUSTING SORTER v2
-function categorizeItem(name: string, count: number, totalKills: number): string {
-    if (count === totalKills || /\b(bones|ashes)\b/i.test(name)) return "100%";
-    if (name === "Coins") return "Coins";
-    if (/\b(clue scroll|ensouled|totem|champion scroll|key|long bone|curved bone|shard|brimstone|larran's)\b/i.test(name)) return "Tertiary";
-    if (/\b(uncut|loop half|tooth half|dragon spear|shield left half|nature talisman|rune javelin|rune spear)\b/i.test(name)) return "Rare drop table";
-    if (/\b(grimy|seed|spore)\b/i.test(name)) return /\b(grimy)\b/i.test(name) ? "Herbs" : "Seeds";
+interface LogItem {
+    id: number;
+    name?: string;
+    qty: number;
+    GE?: number;
+    HA?: number;
+}
 
-    const isRune = /\b(air|water|earth|fire|mind|body|cosmic|chaos|nature|law|death|blood|soul|astral|wrath|mud|lava|steam|dust|smoke|mist)\s+rune\b/i.test(name);
-    const isAmmo = /\b(arrow|arrows|bolt|bolts|dart|darts|javelin|javelins)\b/i.test(name);
-    if (isRune || isAmmo) return "Runes and ammunition";
-
-    const isEquipment = /\b(sword|scimitar|dagger|mace|axe|spear|bow|helm|helmet|platebody|platelegs|plateskirt|shield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite|defender)\b/i.test(name);
-    if (isEquipment) return "Weapons and armour";
-
-    return "Other";
+interface DatabaseRow {
+    log_data: {
+        action?: string;
+        source?: string;
+        regionId?: string | number;
+        items?: LogItem[];
+    };
 }
 
 // Utility to calculate the 1/X rarity fraction
@@ -82,7 +57,6 @@ export default function IndividualMonsterPage() {
     const params = useParams();
     const router = useRouter();
 
-    // Changed from target to monster to match the folder structure [monster]
     const rawTarget = decodeURIComponent((params.monster as string) || "Unknown");
 
     // Instantly redirect spaces to underscores in the URL bar
@@ -107,33 +81,7 @@ export default function IndividualMonsterPage() {
     );
     const gpPerKill = totalKills > 0 ? Math.floor(totalValue / totalKills) : 0;
 
-    useEffect(() => {
-        async function fetchLogs() {
-            setIsLoading(true);
-
-            // Bumped to 5000 to match the Items page and prevent lost data
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .ilike('log_data->>source', targetName)
-                .is('log_data->>action', null)
-                .order('id', {ascending: false})
-                .limit(5000);
-
-            if (error) console.error("Database Error:", error);
-
-            if (data) {
-                processAnalytics(data);
-            }
-            setIsLoading(false);
-        }
-
-        if (targetName !== "Unknown") {
-            fetchLogs();
-        }
-    }, [targetName]);
-
-    function processAnalytics(rawData: any[]) {
+    function processAnalytics(rawData: DatabaseRow[]) {
         const kills = rawData.length;
         setTotalKills(kills);
 
@@ -148,14 +96,11 @@ export default function IndividualMonsterPage() {
             locMap[rId] = (locMap[rId] || 0) + 1;
 
             // Drops
-            // Drops
             if (data.items && data.items.length > 0) {
-                data.items.forEach((item: any) => {
-                    // 1. Identify the item properly
+                data.items.forEach((item: LogItem) => {
                     const itemName = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
                     const key = `${itemName}-${item.qty}`;
 
-                    // 2. The Coin Override!
                     let geValue = item.GE || 0;
                     let haValue = item.HA || 0;
                     if (itemName === "Coins") {
@@ -191,23 +136,45 @@ export default function IndividualMonsterPage() {
         );
     }
 
-    const categoryOrder = [
-        "100%", "Weapons and armour", "Runes and ammunition", "Herbs",
-        "Seeds", "Coins", "Other", "Rare drop table", "Tertiary"
-    ];
+    useEffect(() => {
+        async function fetchLogs() {
+            setIsLoading(true);
 
-    const grouped: Record<string, AggregatedDrop[]> = {
-        "100%": [], "Weapons and armour": [], "Runes and ammunition": [],
-        "Herbs": [], "Seeds": [], "Coins": [], "Other": [],
-        "Rare drop table": [], "Tertiary": []
-    };
+            const {data, error} = await supabase
+                .from('loot_logs')
+                .select('log_data')
+                .ilike('log_data->>source', targetName)
+                .is('log_data->>action', null)
+                .order('id', {ascending: false})
+                .limit(5000);
 
+            if (error) console.error("Database Error:", error);
+
+            if (data) {
+                processAnalytics(data);
+            }
+            setIsLoading(false);
+        }
+
+        if (targetName !== "Unknown") {
+            fetchLogs();
+        }
+    }, [targetName]);
+
+    const grouped: Record<string, AggregatedDrop[]> = {};
+    CATEGORY_ORDER.forEach(cat => {
+        grouped[cat] = [];
+    });
+
+    // Populate the categories
     aggregatedDrops.forEach(drop => {
+        // Pass count and totalKills so the master sorter knows to check for "100%" drops
         const category = categorizeItem(drop.name, drop.count, totalKills);
         if (grouped[category]) {
             grouped[category].push(drop);
         } else {
-            grouped["Other"].push(drop);
+            if (!grouped["Other Loot"]) grouped["Other Loot"] = [];
+            grouped["Other Loot"].push(drop);
         }
     });
 
@@ -282,9 +249,9 @@ export default function IndividualMonsterPage() {
                         ) : aggregatedDrops.length === 0 ? (
                             <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">No drops recorded.</div>
                         ) : (
-                            categoryOrder.map(category => {
+                            CATEGORY_ORDER.map(category => {
                                 const dropsInCategory = grouped[category];
-                                if (dropsInCategory.length === 0) return null;
+                                if (!dropsInCategory || dropsInCategory.length === 0) return null;
 
                                 return (
                                     <div key={category} className="mb-8">
@@ -317,7 +284,6 @@ export default function IndividualMonsterPage() {
                                                                 {drop.name === "Nothing" ? (
                                                                     <span className="text-[#ff6666]">Nothing</span>
                                                                 ) : (
-                                                                    // Properly link to the Items Hub!
                                                                     <Link href={`/items/${drop.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
                                                                         {drop.name}
                                                                     </Link>
