@@ -9,26 +9,43 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Keep this synced with your Hub!
+// 1. FIXED: Full Legacy ID Map
 const LEGACY_ID_MAP: Record<number, string> = {
+    // Trees
     1511: "Logs", 1521: "Oak logs", 1519: "Willow logs", 1515: "Yew logs", 1513: "Magic logs",
+    // Ores
     436: "Copper ore", 438: "Tin ore", 440: "Iron ore", 453: "Coal",
+    // Fish
     317: "Raw shrimps", 321: "Raw anchovies", 327: "Raw sardine", 345: "Raw herring",
     335: "Raw trout", 331: "Raw salmon", 349: "Raw pike", 359: "Raw tuna",
-    371: "Raw swordfish", 377: "Raw lobster"
+    371: "Raw swordfish", 377: "Raw lobster",
+
+    // THE MISSING COMBAT DROPS
+    995: "Coins",
+    592: "Ashes",
+    526: "Bones",
+    532: "Big bones",
+    554: "Fire rune",
+    562: "Chaos rune",
+    560: "Death rune",
+    1061: "Leather boots",
+    333: "Trout",
+    9005: "Fancy boots",
+    9006: "Fighter boots",
+    12812: "Ironman platelegs",
+    314: "Feather"
 };
 
 interface ItemSourceStat {
     sourceName: string;
     category: string;
     quantityDropped: number;
-    timesDropped: number; // How many individual kills/actions yielded this item
+    timesDropped: number;
 }
 
 export default function IndividualItemPage() {
     const params = useParams();
     const rawTarget = decodeURIComponent(params.item as string);
-    // Replace underscores with spaces for the data logic
     const itemNameTarget = rawTarget.replace(/_/g, ' ');
     const displayTitle = itemNameTarget.charAt(0).toUpperCase() + itemNameTarget.slice(1);
 
@@ -43,10 +60,11 @@ export default function IndividualItemPage() {
         async function fetchItemData() {
             setIsLoading(true);
 
-            // Fetch logs. We will filter in memory to find ones containing our item.
+            // Fetch logs with the 5000 limit
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
+                .order('id', {ascending: false})
                 .limit(5000);
 
             if (error) console.error("Database Error:", error);
@@ -60,16 +78,15 @@ export default function IndividualItemPage() {
                 data.forEach((row: any) => {
                     const log = row.log_data;
 
-                    // Skip bank actions and consumes
-                    if (log.action && ['BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'CONSUME', 'DESTROY'].includes(log.action)) {
-                        return;
-                    }
+                    // 2. FIXED: Added 'DROP' and 'PICKUP' to ignored actions
+                    // if (log.action && ['BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'CONSUME', 'DESTROY', 'DROP', 'PICKUP'].includes(log.action)) {
+                    //     return;
+                    // }
 
                     if (log.items && log.items.length > 0) {
                         log.items.forEach((item: any) => {
-                            const currentName = item.name || LEGACY_ID_MAP[item.id] || "Unknown Item";
+                            const currentName = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
 
-                            // Does this item match the page we are on? (Case insensitive check)
                             if (currentName.toLowerCase() === itemNameTarget.toLowerCase()) {
                                 const source = log.source || "Unknown Source";
                                 const category = log.category || "Unknown";
@@ -87,7 +104,6 @@ export default function IndividualItemPage() {
                                 statsMap[source].timesDropped += 1;
                                 totalQty += item.qty;
 
-                                // Capture the individual price (if GE is 30 for qty 1, or 300 for qty 10)
                                 if (ge === 0 && item.GE > 0) ge = item.GE / item.qty;
                                 if (ha === 0 && item.HA > 0) ha = item.HA / item.qty;
                             }
@@ -95,7 +111,6 @@ export default function IndividualItemPage() {
                     }
                 });
 
-                // Sort by highest quantity dropped
                 setSourceStats(Object.values(statsMap).sort((a, b) => b.quantityDropped - a.quantityDropped));
                 setTotalQuantity(totalQty);
                 setSingleGePrice(ge);
@@ -186,10 +201,10 @@ export default function IndividualItemPage() {
                             </tr>
                         ) : (
                             sourceStats.map((stat, idx) => {
-                                // Decide where the link should go based on the category!
+                                // 3. FIXED: Route properly to /monsters/ for combat drops
                                 const linkTarget = stat.category === "Skilling"
                                     ? `/skilling/${stat.sourceName.replace(/ /g, '_')}`
-                                    : `/${stat.sourceName.replace(/ /g, '_')}`;
+                                    : `/monsters/${stat.sourceName.replace(/ /g, '_')}`;
 
                                 return (
                                     <tr key={idx}
