@@ -28,7 +28,7 @@ export function categorizeItem(
 
     // --- 3. EXPANDED REGEX FILTERS ---
     // Currencies
-    if (lowerName === "coins" || /\b(tokkul|numulite|platinum token|mark of grace|stardust|blood money)\b/i.test(lowerName)) return "Currencies";
+    if (lowerName === "coins" || /\b(tokkul|numulite|platinum token|mark of grace|stardust|blood money|barronite shards?|bone fragments?)\b/i.test(lowerName)) return "Currencies";
 
     // Bones & Ashes (Fallback if not a 100% drop)
     if (/\b(bones|ashes)\b/i.test(name) && !lowerName.includes("long bone") && !lowerName.includes("curved bone")) return "Bones & Ashes";
@@ -49,18 +49,18 @@ export function categorizeItem(
     if (isRune || isAmmo) return "Runes & Ammunition";
 
     // Weapons & Armour
-    const isEquipment = /\b(\w*sword|scimitar|dagger|mace|axe|spear|\w*bow|helm|helmet|platebody|platelegs|plateskirt|\w*shield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite\w*|defender|mystic|d'hide|dragonhide|tiara)\b/i.test(name);
+    const isEquipment = /\b(ring|necklace|bracelet|amulet|studded|cape|\w*sword|scimitar|dagger|mace|axe|spear|\w*bow|helm|helmet|platebody|platelegs|plateskirt|\w*shield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite\w*|defender|mystic|d'hide|dragonhide|tiara)\b/i.test(name);
     if (isEquipment) return "Weapons & Armour";
 
     // Food & Potions
-    const isFood = /\b(raw|tuna|trout|salmon|shrimps|beer|cider|ale|kebab|anchovies|potion|brew|shark|manta ray|karambwan|anglerfish|potato|pie|stew|cake)\b/i.test(name);
+    const isFood = /\b(raw|tuna|trout|salmon|shrimps|beer|cider|ale|kebab|anchovies|potion|brew|shark|manta ray|karambwan|anglerfish|potato|pie|stew|cake|lobster|pike|bread)\b/i.test(name);
     if (isFood && !lowerName.includes("burnt")) return "Food & Potions";
 
     const isBurntFood = /\b(burnt)\b/i.test(name);
     if (isBurntFood) return "Burnt Food";
 
     // Skilling Equipment
-    const isSkillingEquip = /\b(\w*fishing rod|tinderbox|forestry kit|hammer|\w*fishing net|pickaxe|harpoon|spade|mould|mold|chisel)\b/i.test(name);
+    const isSkillingEquip = /\b(\w*fishing rod|tinderbox|forestry kit|hammer|\w*fishing net|pickaxe|harpoon|spade|mould|mold|chisel|needle|thread|bucket|feather|apron|shears|bait)\b/i.test(name);
     if (isSkillingEquip) return "Skilling Equipment";
 
     // Talismans
@@ -68,7 +68,7 @@ export function categorizeItem(
     if (isTalisman) return "Talismans";
 
     // Raw Resources
-    const isResource = /\b(logs?|ore|coal|seaweed|oyster|cowhide|bar|clay|essence|flax|sandstone|granite|amethyst|salt|plank)\b/i.test(name);
+    const isResource = /\b(core|logs?|ore|coal|seaweed|oyster|cowhide|bar|clay|essence|flax|sandstone|granite|amethyst|salt|plank)\b/i.test(name);
     if (isResource) return "Raw Resources";
 
     return "Other Loot";
