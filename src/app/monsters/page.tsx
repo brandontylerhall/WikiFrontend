@@ -8,6 +8,11 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+interface MonsterViewRow {
+    monster_name: string;
+    kill_count: number;
+}
+
 export default function MonstersHub() {
     const [monsterStats, setMonsterStats] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
@@ -16,20 +21,18 @@ export default function MonstersHub() {
         async function fetchMonsters() {
             setIsLoading(true);
 
-            const { data, error } = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .is('log_data->>action', null)
-                .neq('log_data->>source', 'None')
-                .order('id', { ascending: false });
+            const {data, error} = await supabase
+                .from('monster_kill_counts')
+                .select('*')
+                .order('monster_name', {ascending: true});
 
             if (error) console.error("Database Error:", error);
 
             if (data) {
-                const stats = data.reduce((acc: Record<string, number>, row: any) => {
-                    const source = row.log_data.source;
-                    if (source && !source.toLowerCase().includes('pickup')) {
-                        acc[source] = (acc[source] || 0) + 1;
+                // Properly type the 'row' as the view's output
+                const stats = data.reduce((acc: Record<string, number>, row: MonsterViewRow) => {
+                    if (row.monster_name && !row.monster_name.toLowerCase().includes('pickup')) {
+                        acc[row.monster_name] = row.kill_count;
                     }
                     return acc;
                 }, {});
@@ -42,7 +45,6 @@ export default function MonstersHub() {
         fetchMonsters();
     }, []);
 
-    // Sort monsters alphabetically for the UI
     const sortedMonsters = Object.entries(monsterStats).sort((a, b) => a[0].localeCompare(b[0]));
 
     return (
@@ -82,22 +84,20 @@ export default function MonstersHub() {
                             return (
                                 <Link
                                     key={monsterName}
-                                    href={`/${urlFriendlyName}`}
+                                    href={`/monsters/${urlFriendlyName}`}
                                     className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex justify-between items-center hover:bg-[#2a2a2a] hover:border-[#cca052] transition-colors group"
                                 >
-                  <span className="font-bold text-[#729fcf] group-hover:text-[#cca052]">
-                    {displayTitle}
-                  </span>
-                                    <span
-                                        className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a]">
-                    KC: {killCount.toLocaleString()}
-                  </span>
+                                  <span className="font-bold text-[#729fcf] group-hover:text-[#cca052]">
+                                    {displayTitle}
+                                  </span>
+                                    <span className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a]">
+                                    KC: {killCount.toLocaleString()}
+                                  </span>
                                 </Link>
                             );
                         })}
                     </div>
                 )}
-
             </div>
         </div>
     );

@@ -15,7 +15,7 @@ export const XP_MAP: Record<string, number> = {
     "Logs": 25, "Oak logs": 37.5, "Willow logs": 67.5, "Teak logs": 85,
     "Maple logs": 100, "Mahogany logs": 125, "Yew logs": 175, "Magic logs": 250,
     // Mining
-    "Copper ore": 17.5, "Tin ore": 17.5, "Iron ore": 35, "Coal": 50,
+    "Copper ore": 17.5, "Tin ore": 17.5, "Iron ore": 35, "Coal": 50, "Barronite shards": 16, "Barronite deposit": 32,
     // Fishing (With singular safety nets)
     "Raw shrimps": 10, "Raw shrimp": 10, "Shrimps": 10,
     "Raw sardine": 20, "Raw herring": 30, "Raw anchovies": 40, "Raw anchovy": 40,

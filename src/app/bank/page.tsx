@@ -1,29 +1,16 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import React, {useEffect, useState} from 'react';
+import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
-import { LEGACY_ID_MAP } from '@/lib/constants';
-import { categorizeItem, CATEGORY_ORDER } from '@/lib/utils';
+import {LEGACY_ID_MAP} from '@/lib/constants';
+import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
+import WikiLayout from "@/components/WikiLayout";
+import {DatabaseRow, LogItem} from '@/lib/types';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-interface LogItem {
-    id: number;
-    name?: string;
-    qty: number;
-    GE?: number;
-    HA?: number;
-}
-
-interface DatabaseRow {
-    log_data: {
-        action?: string;
-        items?: LogItem[];
-    };
-}
 
 interface BankItemTracking {
     name: string;
@@ -50,10 +37,10 @@ export default function BankHub() {
     useEffect(() => {
         async function fetchBankItems() {
             setIsLoading(true);
-            const { data } = await supabase
+            const {data} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .order('id', { ascending: false })
+                .order('id', {ascending: false})
                 .limit(5000); // Reads newest first
 
             if (data) {
@@ -67,7 +54,15 @@ export default function BankHub() {
                             const name = (item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`).trim();
 
                             if (!itemMap[name]) {
-                                itemMap[name] = { name, snapshotBase: 0, deposits: 0, withdrawals: 0, unitGe: 0, unitHa: 0, foundSnapshot: false };
+                                itemMap[name] = {
+                                    name,
+                                    snapshotBase: 0,
+                                    deposits: 0,
+                                    withdrawals: 0,
+                                    unitGe: 0,
+                                    unitHa: 0,
+                                    foundSnapshot: false
+                                };
                             }
 
                             // Update Prices from ANY log
@@ -142,8 +137,8 @@ export default function BankHub() {
     });
 
     return (
-        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans p-8">
-            <div className="max-w-[1000px] mx-auto">
+        <WikiLayout>
+            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
@@ -168,9 +163,13 @@ export default function BankHub() {
                 </div>
 
                 {isLoading ? (
-                    <div className="text-center text-gray-500 italic mt-12 border border-[#3a3a3a] bg-[#1e1e1e] p-8">Reading bank snapshot...</div>
+                    <div
+                        className="text-center text-gray-500 italic mt-12 border border-[#3a3a3a] bg-[#1e1e1e] p-8">Reading
+                        bank snapshot...</div>
                 ) : sortedCategoryKeys.length === 0 ? (
-                    <div className="text-center text-gray-500 italic mt-12 border border-[#3a3a3a] bg-[#1e1e1e] p-8">No banked items found. Go open your bank in-game to sync!</div>
+                    <div
+                        className="text-center text-gray-500 italic mt-12 border border-[#3a3a3a] bg-[#1e1e1e] p-8">No
+                        banked items found. Go open your bank in-game to sync!</div>
                 ) : (
                     sortedCategoryKeys.map(catName => {
                         const items = categories[catName];
@@ -184,11 +183,14 @@ export default function BankHub() {
                                     <h2 className="text-xl font-serif text-white">{catName}</h2>
                                     <span className="text-[#cca052] text-sm">{catValue.toLocaleString()} gp</span>
                                 </div>
-                                <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                <table
+                                    className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
                                     <thead>
                                     <tr className="bg-[#2a2a2a] text-white">
                                         <th className="w-1/2 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                        <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-center font-bold">In Bank</th>
+                                        <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-center font-bold">In
+                                            Bank
+                                        </th>
                                         <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
                                     </tr>
                                     </thead>
@@ -216,6 +218,6 @@ export default function BankHub() {
                     })
                 )}
             </div>
-        </div>
+        </WikiLayout>
     );
 }

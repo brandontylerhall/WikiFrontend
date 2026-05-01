@@ -3,7 +3,12 @@
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import {useParams, useRouter} from 'next/navigation';
+import Link from 'next/link';
 import regionData from '@/data/regions.json';
+import {LEGACY_ID_MAP} from '@/lib/constants';
+import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
+import WikiLayout from "@/components/WikiLayout";
+import {DatabaseRow, LogItem, AggregatedDrop, AggregatedLocation} from '@/lib/types';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -12,55 +17,13 @@ const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- INTERFACES ---
-interface AggregatedDrop {
+interface RawDropRecord {
     name: string;
-    qty: string | number;
+    qty: number;
     count: number;
     gePrice: number;
     haPrice: number;
-}
-
-interface AggregatedLocation {
-    regionId: string;
-    count: number;
-}
-
-// THE DISGUSTING SORTER v2
-function categorizeItem(name: string, count: number, totalKills: number): string {
-    // 1. 100% Drops
-    if (count === totalKills || /\b(bones|ashes)\b/i.test(name)) {
-        return "100%";
-    }
-
-    // 2. Coins
-    if (name === "Coins") return "Coins";
-
-    // 3. Tertiary
-    if (/\b(clue scroll|ensouled|totem|champion scroll|key|long bone|curved bone|shard|brimstone|larran's)\b/i.test(name)) {
-        return "Tertiary";
-    }
-
-    // 4. Rare Drop Table / Gems
-    if (/\b(uncut|loop half|tooth half|dragon spear|shield left half|nature talisman|rune javelin|rune spear)\b/i.test(name)) {
-        return "Rare drop table";
-    }
-
-    // 5. Herbs and Seeds
-    if (/\b(grimy|seed|spore)\b/i.test(name)) {
-        return /\b(grimy)\b/i.test(name) ? "Herbs" : "Seeds";
-    }
-
-    // 6. Runes and Ammunition
-    const isRune = /\b(air|water|earth|fire|mind|body|cosmic|chaos|nature|law|death|blood|soul|astral|wrath|mud|lava|steam|dust|smoke|mist)\s+rune\b/i.test(name);
-    const isAmmo = /\b(arrow|arrows|bolt|bolts|dart|darts|javelin|javelins)\b/i.test(name);
-    if (isRune || isAmmo) return "Runes and ammunition";
-
-    // 7. Weapons and Armour
-    const isEquipment = /\b(sword|scimitar|dagger|mace|axe|spear|bow|helm|helmet|platebody|platelegs|plateskirt|shield|chainbody|mail|hide|staff|wand|boots|gloves|chaps|vamb|leather|robes?|top|bottom|halberd|battleaxe|2h|warhammer|sq|kite|defender)\b/i.test(name);
-    if (isEquipment) return "Weapons and armour";
-
-    // 8. Other
-    return "Other";
+    firstKc: number;
 }
 
 // Utility to calculate the 1/X rarity fraction
@@ -75,31 +38,180 @@ export default function DynamicWikiPage() {
     const params = useParams();
     const router = useRouter();
 
-    // URL Cleanup Logic
-    const rawTarget = decodeURIComponent((params.target as string) || "Unknown");
+    // Use target or monster depending on what you named your folder!
+    const rawTarget = decodeURIComponent((params.target as string) || (params.monster as string) || "Unknown");
 
     // Instantly redirect spaces to underscores in the URL bar
     useEffect(() => {
         if (rawTarget.includes(' ')) {
             const standardizedUrl = rawTarget.replace(/ /g, '_');
+            // Update this routing path if you use /monsters/ instead!
             router.replace(`/${standardizedUrl}`);
         }
     }, [rawTarget, router]);
 
-    // UI and Database name (translates underscores back to spaces)
     const targetName = rawTarget.replace(/_/g, ' ');
     const displayTitle = targetName.charAt(0).toUpperCase() + targetName.slice(1);
 
-    // State
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [totalKills, setTotalKills] = useState(0);
     const [aggregatedDrops, setAggregatedDrops] = useState<AggregatedDrop[]>([]);
     const [aggregatedLocations, setAggregatedLocations] = useState<AggregatedLocation[]>([]);
-    const totalValue = aggregatedDrops.reduce((acc, drop) =>
-        acc + ((isIronman ? drop.haPrice : drop.gePrice) * drop.count), 0
-    );
+
+    const totalValue = aggregatedDrops
+        .filter(drop => !drop.isSummary)
+        .reduce((acc, drop) => acc + ((isIronman ? drop.haPrice : drop.gePrice) * drop.totalQty), 0);
+
     const gpPerKill = totalKills > 0 ? Math.floor(totalValue / totalKills) : 0;
+
+    function processAnalytics(rawData: DatabaseRow[]) {
+        const kills = rawData.length;
+        setTotalKills(kills);
+
+        const locMap: Record<string, number> = {};
+
+        // Time-travel loop to find First KC
+        const firstKcMap: Record<string, number> = {};
+        for (let i = kills - 1; i >= 0; i--) {
+            const currentKc = kills - i;
+            const items = rawData[i].log_data.items;
+
+            if (items) {
+                items.forEach((item: LogItem) => {
+                    const itemName = item.name || LEGACY_ID_MAP[item.id] || `Unknown`;
+                    if (!firstKcMap[itemName]) {
+                        firstKcMap[itemName] = currentKc;
+                    }
+                });
+            }
+        }
+
+        // Pass 1: Raw grouping by exact Name + Qty
+        const rawDropMap: Record<string, RawDropRecord> = {};
+
+        rawData.forEach(row => {
+            const data = row.log_data;
+
+            // Locations
+            const rId = String(data.regionId);
+            locMap[rId] = (locMap[rId] || 0) + 1;
+
+            // Drops
+            if (data.items && data.items.length > 0) {
+                data.items.forEach((item: LogItem) => {
+                    const itemName = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
+                    const key = `${itemName}-${item.qty}`;
+
+                    let geValue = item.GE || 0;
+                    let haValue = item.HA || 0;
+
+                    if (itemName === "Coins") {
+                        geValue = 1;
+                        haValue = 1;
+                    } else {
+                        if (geValue > 0) geValue = geValue / item.qty;
+                        if (haValue > 0) haValue = haValue / item.qty;
+                    }
+
+                    if (!rawDropMap[key]) {
+                        rawDropMap[key] = {
+                            name: itemName,
+                            qty: item.qty,
+                            count: 0,
+                            gePrice: geValue,
+                            haPrice: haValue,
+                            firstKc: firstKcMap[itemName]
+                        };
+                    }
+                    rawDropMap[key].count += 1;
+                });
+            } else {
+                if (!rawDropMap["Nothing-0"]) {
+                    rawDropMap["Nothing-0"] = {name: "Nothing", qty: 0, count: 0, gePrice: 0, haPrice: 0, firstKc: 0};
+                }
+                rawDropMap["Nothing-0"].count += 1;
+            }
+        });
+
+        // Pass 2: The Data Science Separator
+        const nameGroups: Record<string, RawDropRecord[]> = {};
+        Object.values(rawDropMap).forEach(drop => {
+            if (!nameGroups[drop.name]) nameGroups[drop.name] = [];
+            nameGroups[drop.name].push(drop);
+        });
+
+        const finalDrops: AggregatedDrop[] = [];
+
+        Object.values(nameGroups).forEach(drops => {
+            const totalDropsOfItem = drops.reduce((sum, d) => sum + d.count, 0);
+            const totalItemQty = drops.reduce((sum, d) => sum + (d.count * d.qty), 0);
+
+            const isRange = drops.length > 8;
+
+            if (isRange) {
+                const minQty = Math.min(...drops.map(d => d.qty));
+                const maxQty = Math.max(...drops.map(d => d.qty));
+                const baseDrop = drops[0];
+
+                finalDrops.push({
+                    name: baseDrop.name,
+                    displayQty: minQty === maxQty ? minQty : `${minQty} - ${maxQty}`,
+                    totalQty: totalItemQty,
+                    count: totalDropsOfItem,
+                    gePrice: baseDrop.gePrice,
+                    haPrice: baseDrop.haPrice,
+                    isSummary: false,
+                    firstKc: Math.min(...drops.map(d => d.firstKc))
+                });
+            } else {
+                if (drops.length > 1) {
+                    const baseDrop = drops[0];
+                    finalDrops.push({
+                        name: `${baseDrop.name} (Any)`,
+                        displayQty: "Varies",
+                        totalQty: totalItemQty,
+                        count: totalDropsOfItem,
+                        gePrice: baseDrop.gePrice,
+                        haPrice: baseDrop.haPrice,
+                        isSummary: true,
+                        firstKc: Math.min(...drops.map(d => d.firstKc))
+                    });
+                }
+
+                drops.forEach(d => {
+                    finalDrops.push({
+                        name: d.name,
+                        displayQty: d.qty,
+                        totalQty: d.qty * d.count,
+                        count: d.count,
+                        gePrice: d.gePrice,
+                        haPrice: d.haPrice,
+                        isSummary: false,
+                        firstKc: d.firstKc
+                    });
+                });
+            }
+        });
+
+        setAggregatedLocations(
+            Object.keys(locMap).map(key => ({regionId: key, count: locMap[key]})).sort((a, b) => b.count - a.count)
+        );
+
+        setAggregatedDrops(
+            finalDrops.sort((a, b) => {
+                const aBase = a.name.replace(' (Any)', '');
+                const bBase = b.name.replace(' (Any)', '');
+
+                if (aBase === bBase) {
+                    if (a.isSummary) return -1;
+                    if (b.isSummary) return 1;
+                    return b.count - a.count;
+                }
+                return b.count - a.count;
+            })
+        );
+    }
 
     useEffect(() => {
         async function fetchLogs() {
@@ -110,8 +222,8 @@ export default function DynamicWikiPage() {
                 .select('log_data')
                 .ilike('log_data->>source', targetName)
                 .is('log_data->>action', null)
-                .order('created_at', {ascending: false})
-                .limit(1000);
+                .order('id', {ascending: false})
+                .limit(5000);
 
             if (error) console.error("Database Error:", error);
 
@@ -126,97 +238,36 @@ export default function DynamicWikiPage() {
         }
     }, [targetName]);
 
-    function processAnalytics(rawData: any[]) {
-        const kills = rawData.length;
-        setTotalKills(kills);
-
-        const dropMap: Record<string, AggregatedDrop> = {};
-        const locMap: Record<string, number> = {};
-
-        rawData.forEach(row => {
-            const data = row.log_data;
-
-            // Locations
-            const rId = String(data.regionId);
-            locMap[rId] = (locMap[rId] || 0) + 1;
-
-            // Drops
-            if (data.items && data.items.length > 0) {
-                data.items.forEach((item: any) => {
-                    const key = `${item.name}-${item.qty}`;
-                    if (!dropMap[key]) {
-                        dropMap[key] = {
-                            name: item.name,
-                            qty: item.qty,
-                            count: 0,
-                            gePrice: item.GE,
-                            haPrice: item.HA
-                        };
-                    }
-                    dropMap[key].count += 1;
-                });
-            } else {
-                if (!dropMap["nothing"]) {
-                    dropMap["nothing"] = {name: "Nothing", qty: "N/A", count: 0, gePrice: 0, haPrice: 0};
-                }
-                dropMap["nothing"].count += 1;
-            }
-        });
-
-        setAggregatedLocations(
-            Object.keys(locMap).map(key => ({regionId: key, count: locMap[key]})).sort((a, b) => b.count - a.count)
-        );
-
-        setAggregatedDrops(
-            Object.values(dropMap).sort((a, b) => b.count - a.count)
-        );
-    }
-
-    // The categories we want to display, in order
-    const categoryOrder = [
-        "100%",
-        "Weapons and armour",
-        "Runes and ammunition",
-        "Herbs",
-        "Seeds",
-        "Coins",
-        "Other",
-        "Rare drop table",
-        "Tertiary"
-    ];
-
-    // Group drops by category
-    const grouped: Record<string, AggregatedDrop[]> = {
-        "100%": [],
-        "Weapons and armour": [],
-        "Runes and ammunition": [],
-        "Herbs": [],
-        "Seeds": [],
-        "Coins": [],
-        "Other": [],
-        "Rare drop table": [],
-        "Tertiary": []
-    };
+    const grouped: Record<string, AggregatedDrop[]> = {};
+    CATEGORY_ORDER.forEach(cat => {
+        grouped[cat] = [];
+    });
 
     aggregatedDrops.forEach(drop => {
-        const category = categorizeItem(drop.name, drop.count, totalKills);
+        const cleanNameForCategory = drop.name.replace(' (Any)', '');
+        const category = categorizeItem(cleanNameForCategory, drop.count, totalKills);
+
         if (grouped[category]) {
             grouped[category].push(drop);
         } else {
-            grouped["Other"].push(drop);
+            if (!grouped["Other Loot"]) grouped["Other Loot"] = [];
+            grouped["Other Loot"].push(drop);
         }
     });
 
     return (
-        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans text-[14px] leading-relaxed">
-            <div className="max-w-[1200px] mx-auto p-6 bg-[#121212]">
+        <WikiLayout>
+            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+                {/* BACK LINK */}
+                <Link href="/monsters" className="text-[#729fcf] hover:underline mb-2 block">{'<'} Back to
+                    Bestiary</Link>
 
                 {/* HEADER */}
                 <div className="flex gap-4 text-sm mt-2">
                     <h2>
-                    <span className="text-gray-400">Total Loot: <span
-                        className="text-[#fbdb71]">{totalValue.toLocaleString()} gp</span></span>
-                        <span className="text-gray-400">Avg/Kill: <span
+                        <span className="text-gray-400">Total Loot: <span
+                            className="text-[#fbdb71]">{totalValue.toLocaleString()} gp</span></span>
+                        <span className="text-gray-400 ml-4">Avg/Kill: <span
                             className="text-[#fbdb71]">{gpPerKill.toLocaleString()} gp</span></span>
                     </h2>
                 </div>
@@ -232,13 +283,10 @@ export default function DynamicWikiPage() {
                     </button>
                 </div>
 
-                {/* WIKI LAYOUT */}
-
                 <div className="flex flex-col lg:flex-row gap-6 items-start">
 
                     {/* LEFT: MAIN CONTENT */}
                     <div className="flex-1 w-full order-2 lg:order-1">
-
                         <p className="mb-4">
                             <strong className="text-white">{displayTitle}s</strong> are monsters found around Gielinor.
                             The data below is generated dynamically based on <strong
@@ -247,17 +295,17 @@ export default function DynamicWikiPage() {
                         </p>
 
                         {/* LOCATIONS SECTION */}
-                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4 mt-8">
-                            Locations
-                        </h2>
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4 mt-8">Locations</h2>
                         <div className="overflow-x-auto mb-8">
-                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                            <table
+                                className="w-full table-fixed border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
                                 <thead>
                                 <tr className="bg-[#2a2a2a] text-white">
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Location</th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Region ID
+                                    <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Location</th>
+                                    <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Region
+                                        ID
                                     </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Logged
+                                    <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Logged
                                         Kills
                                     </th>
                                 </tr>
@@ -272,9 +320,7 @@ export default function DynamicWikiPage() {
                                     </tr>
                                 ) : aggregatedLocations.map((loc, idx) => (
                                     <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
-                                        <td className="border border-[#3a3a3a] px-3 py-2 text-[#729fcf] cursor-pointer hover:underline">
-                                            {regionDictionary[loc.regionId] || `Unknown Area`}
-                                        </td>
+                                        <td className="border border-[#3a3a3a] px-3 py-2 text-[#729fcf]">{regionDictionary[loc.regionId] || `Unknown Area`}</td>
                                         <td className="border border-[#3a3a3a] px-3 py-2 text-center text-gray-400">{loc.regionId}</td>
                                         <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{loc.count.toLocaleString()}</td>
                                     </tr>
@@ -284,46 +330,41 @@ export default function DynamicWikiPage() {
                         </div>
 
                         {/* DROP TABLE SECTION */}
-                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4">
-                            Live Drop Tables
-                        </h2>
-                        <p className="mb-4 text-xs italic text-gray-400">
-                            Drop rates are calculated dynamically based on {totalKills} total records.
-                        </p>
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4">Live
+                            Drop Tables</h2>
+                        <p className="mb-4 text-xs italic text-gray-400">Drop rates are calculated dynamically based
+                            on {totalKills} total records.</p>
 
                         {isLoading ? (
-                            <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">
-                                Crunching drop rates...
-                            </div>
+                            <div
+                                className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">Crunching
+                                drop rates...</div>
                         ) : aggregatedDrops.length === 0 ? (
-                            <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">
-                                No drops recorded.
-                            </div>
+                            <div
+                                className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">No
+                                drops recorded.</div>
                         ) : (
-                            categoryOrder.map(category => {
+                            CATEGORY_ORDER.map(category => {
                                 const dropsInCategory = grouped[category];
-                                if (dropsInCategory.length === 0) return null; // Hide empty categories
+                                if (!dropsInCategory || dropsInCategory.length === 0) return null;
 
                                 return (
                                     <div key={category} className="mb-8">
-                                        <h3 className="text-[18px] font-serif text-[#ffffff] font-bold mb-2">
-                                            {category}
-                                        </h3>
-
+                                        <h3 className="text-[18px] font-serif text-[#ffffff] font-bold mb-2">{category}</h3>
                                         <div className="overflow-x-auto">
                                             <table
-                                                className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                                className="w-full table-fixed border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
                                                 <thead>
                                                 <tr className="bg-[#2a2a2a] text-white">
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Quantity</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">Logged
+                                                    <th className="w-1/5 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
+                                                    <th className="w-1/5 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Quantity</th>
+                                                    <th className="w-1/5 border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">Logged
                                                         Drops
                                                     </th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Calculated
+                                                    <th className="w-1/5 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Calculated
                                                         Rarity
                                                     </th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold">Price
+                                                    <th className="w-1/5 border border-[#3a3a3a] px-3 py-2 text-right font-bold">Price
                                                         ({isIronman ? 'HA' : 'GE'})
                                                     </th>
                                                 </tr>
@@ -341,28 +382,56 @@ export default function DynamicWikiPage() {
 
                                                     return (
                                                         <tr key={idx}
-                                                            className={`${rowBg} hover:bg-[#333333] transition-colors`}>
-                                                            <td className="border border-[#3a3a3a] px-3 py-2">
+                                                            className={`${rowBg} hover:bg-[#333333] transition-colors ${drop.isSummary ? "border-t-2 border-[#cca052]/30" : ""}`}>
+
+                                                            <td className={`border border-[#3a3a3a] px-3 py-2 ${!drop.isSummary && drop.name !== "Nothing" ? "pl-8" : ""}`}>
                                                                 {drop.name === "Nothing" ? (
                                                                     <span className="text-[#ff6666]">Nothing</span>
                                                                 ) : (
-                                                                    <span
-                                                                        className="text-[#729fcf] cursor-pointer hover:underline">{drop.name}</span>
+                                                                    <div
+                                                                        className={`flex items-center ${drop.isSummary ? "justify-center" : "gap-2"}`}>
+                                                                        {!drop.isSummary && <span
+                                                                            className="text-gray-600 text-xs">└</span>}
+
+                                                                        {drop.isSummary ? (
+                                                                            <span
+                                                                                className="text-[#cca052] font-bold">{drop.name}</span>
+                                                                        ) : (
+                                                                            <Link
+                                                                                href={`/items/${drop.name.replace(/ /g, '_')}`}
+                                                                                className="text-[#729fcf] hover:underline"
+                                                                            >
+                                                                                {drop.name}
+                                                                            </Link>
+                                                                        )}
+
+                                                                        {drop.firstKc && (
+                                                                            (["Tertiary", "Rare drop table"].includes(category) ||
+                                                                                /\b(club|skull|sceptre|scepter|champion scroll|pet|piece|bottom|top|key|totem|essence|mutagen|visage|hilt|fang)\b/i.test(drop.name))
+                                                                        ) && !drop.isSummary && (
+                                                                            <span
+                                                                                className="ml-2 text-[10px] text-[#cca052] bg-[#cca052]/10 px-1.5 py-0.5 rounded border border-[#cca052]/30 whitespace-nowrap">
+                                                                                1st @ {drop.firstKc.toLocaleString()} KC
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
                                                                 )}
                                                             </td>
+
                                                             <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#ffffff]">
-                                                                {drop.qty}
+                                                                {drop.displayQty}
                                                             </td>
                                                             <td className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">
                                                                 {drop.count}
                                                             </td>
                                                             <td className="border border-[#3a3a3a] p-0 text-center font-mono text-xs">
-                                                                <div className={`w-full h-full p-2 ${rarityColor}`}>
-                                                                    {rarityString}
-                                                                </div>
+                                                                <div
+                                                                    className={`w-full h-full p-2 ${rarityColor}`}>{rarityString}</div>
                                                             </td>
                                                             <td className="border border-[#3a3a3a] px-3 py-2 text-right text-[#ffffff]">
-                                                                {drop.name === "Nothing" ? "N/A" : (isIronman ? drop.haPrice : drop.gePrice).toLocaleString()}
+                                                                {drop.name === "Nothing" ? "N/A" : (
+                                                                    Math.floor((drop.totalQty / drop.count) * (isIronman ? drop.haPrice : drop.gePrice)).toLocaleString()
+                                                                )}
                                                             </td>
                                                         </tr>
                                                     );
@@ -374,22 +443,18 @@ export default function DynamicWikiPage() {
                                 );
                             })
                         )}
-
                     </div>
 
                     {/* RIGHT: THE WIKI INFOBOX */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
                             <tbody>
-                            {/* Header */}
                             <tr>
                                 <th colSpan={2}
                                     className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
                                     {displayTitle}
                                 </th>
                             </tr>
-
-                            {/* Image */}
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div
@@ -398,8 +463,6 @@ export default function DynamicWikiPage() {
                                     </div>
                                 </td>
                             </tr>
-
-                            {/* Properties Section */}
                             <tr>
                                 <th colSpan={2}
                                     className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
@@ -413,10 +476,10 @@ export default function DynamicWikiPage() {
                                 <td className="p-2 border border-[#3a3a3a] text-[#ffffff]">?</td>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">
-                                    Kill Count
+                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Kill
+                                    Count
                                 </th>
-                                <td className="p-2 border border-[#3a3a3a] text-[#ffffff]">{totalKills}</td>
+                                <td className="p-2 border border-[#3a3a3a] text-[#ffffff]">{totalKills.toLocaleString()}</td>
                             </tr>
                             <tr className="bg-[#222222]">
                                 <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Size</th>
@@ -428,8 +491,6 @@ export default function DynamicWikiPage() {
                                     generated {targetName}.
                                 </td>
                             </tr>
-
-                            {/* Combat Stats Section */}
                             <tr>
                                 <th colSpan={2}
                                     className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold mt-4">
@@ -442,8 +503,6 @@ export default function DynamicWikiPage() {
                                     Stat API Integration Pending
                                 </td>
                             </tr>
-
-                            {/* Slayer Section */}
                             <tr>
                                 <th colSpan={2}
                                     className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold mt-4">
@@ -457,9 +516,8 @@ export default function DynamicWikiPage() {
                             </tbody>
                         </table>
                     </div>
-
                 </div>
             </div>
-        </div>
+        </WikiLayout>
     );
 }

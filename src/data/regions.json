@@ -4,18 +4,24 @@
   "12849": "Lumbridge Swamp (East)",
   "12593": "Lumbridge Swamp (West)",
   "13106": "Lumbridge / Al Kharid Gate",
+  "12594": "Lumbridge Woods",
 
-  "12342": "Draynor Village",
-  "12343": "Draynor Manor",
-  "12341": "Wizards' Tower",
+  "12338": "Draynor Village",
+  "12340": "Draynor Manor",
+  "12337": "Wizards' Tower",
 
   "12853": "Varrock Square",
-  "12597": "Varrock (West Bank)",
-  "13109": "Varrock (East Bank)",
+  "12597": "Varrock (West Bank, Cook's Guild)",
+  "13109": "Varrock (East Bank, )",
   "12852": "South Varrock / Champions' Guild",
   "12598": "Grand Exchange",
-  "12345": "Edgeville",
+  "12342": "Edgeville",
   "12344": "Barbarian Village",
+
+  "7505": "Stronghold of Security: Vault of War (Level 1)",
+  "8017": "Stronghold of Security: Catacomb of Famine (Level 2)",
+  "8530": "Stronghold of Security: Pit of Pestilence (Level 3)",
+  "9297": "Stronghold of Security: Sepulchre of Death (Level 4)",
 
   "11828": "Falador (Center & Park)",
   "11829": "Falador (North)",
@@ -34,12 +40,13 @@
   "10028": "Corsair Cove",
   "10284": "Corsair Cove (Resource Area)",
 
-  "12445": "Edgeville Dungeon (South)",
-  "12446": "Edgeville Dungeon (North)",
+  "12441": "Edgeville Dungeon (Hill Giants)",
+  "12445": "Edgeville Dungeon",
+  "12446": "Edgeville Dungeon",
   "12953": "Varrock Sewers",
   "12084": "Dwarven Mine",
   "12081": "Asgarnian Ice Dungeon",
-  "11313": "Karamja Volcano Dungeon (Lesser Demons)",
+  "11313": "Karamja Volcano",
   "8076": "Corsair Cove Dungeon (Ogresses)",
   "11674": "Ruins of Camdozaal",
 
@@ -49,7 +56,11 @@
   "13113": "The Bone Yard",
   "13370": "Demonic Ruins",
   "12090": "Lava Maze",
-  "13116": "Annakarl",
-  "12858": "Bone Yard"
+  "13116": "Demonic Ruins (Annakarl)",
+  "12858": "Bone Yard",
+
+  "11866": "Camdozaal",
+  "12122": "Camdozaal",
+  "11610": "Camdozaal Mines"
 
 }

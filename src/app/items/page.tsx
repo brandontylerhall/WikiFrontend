@@ -3,7 +3,12 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import {LEGACY_ID_MAP} from '@/lib/constants';
-import { categorizeItem, CATEGORY_ORDER } from '@/lib/utils';
+import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
+import regionData from '@/data/regions.json';
+import WikiLayout from "@/components/WikiLayout";
+import { DatabaseRow, LogItem } from '@/lib/types';
+
+const regionDictionary: Record<string, string> = regionData;
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -14,21 +19,7 @@ interface ProcessedItem {
     qty: number;
     unitGe: number;
     unitHa: number;
-}
-
-interface LogItem {
-    id: number;
-    name?: string;
-    qty: number;
-    GE?: number;
-    HA?: number;
-}
-
-interface DatabaseRow {
-    log_data: {
-        action?: string;
-        items?: LogItem[];
-    };
+    origins: Set<string>;
 }
 
 export default function ItemsPage() {
@@ -50,27 +41,45 @@ export default function ItemsPage() {
 
                 data.forEach((row: DatabaseRow) => {
                     const log = row.log_data;
-                    const ALLOWED_ITEM_ACTIONS = [null, 'GATHER_GAIN', 'PICKUP'];
-
-                    if (log.action !== undefined && !ALLOWED_ITEM_ACTIONS.includes(log.action)) {
-                        return;
-                    }
 
                     if (log.items) {
+                        const category = log.category || "Unknown";
+                        const source = log.source || "";
+                        const regionId = log.regionId;
+
+                        // Define what actions actually count towards your "Lifetime Drops" qty
+                        const ALLOWED_ITEM_ACTIONS = [null, 'GATHER_GAIN', 'PICKUP', 'NPC_DROP'];
+                        const isAllowedAction = log.action === undefined || ALLOWED_ITEM_ACTIONS.includes(log.action);
+
                         log.items.forEach((item: LogItem) => {
                             const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
 
                             if (!itemMap[name]) {
-                                itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0};
+                                itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0, origins: new Set()};
                             }
 
-                            itemMap[name].qty += item.qty;
-
+                            // 1. EXTRACT PRICES FROM *EVERY* LOG (Including Bank Snapshots!)
                             const itemGE = item.GE || 0;
                             const itemHA = item.HA || 0;
 
                             if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
                             if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
+
+                            // 2. ONLY INCREMENT QUANTITY/ORIGIN IF IT WAS ACTUALLY A DROP/GATHER
+                            if (isAllowedAction) {
+                                itemMap[name].qty += item.qty;
+
+                                if (category === 'Combat' || log.action === 'NPC_DROP') {
+                                    if (source && !["none", "pickup", "unknown/pickup", "bank", "unknown"].includes(source.toLowerCase())) {
+                                        itemMap[name].origins.add(source);
+                                    }
+                                } else {
+                                    if (regionId) {
+                                        const regionName = regionDictionary[String(regionId)];
+                                        itemMap[name].origins.add(regionName || `Region ${regionId}`);
+                                    }
+                                }
+                            }
                         });
                     }
                 });
@@ -78,11 +87,16 @@ export default function ItemsPage() {
                 const categorized: Record<string, ProcessedItem[]> = {};
 
                 Object.values(itemMap).forEach(item => {
+                    // Only show items that actually have a quantity gathered
+                    if (item.qty <= 0) return;
+
                     if (item.name === "Coins" && item.unitGe === 0) {
                         item.unitGe = 1;
                         item.unitHa = 1;
                     }
 
+                    // Dynamically pass the category (Skilling vs Combat) based on origin context if needed
+                    // For global item maps, leaving it to default works beautifully with the new regex
                     const catName = categorizeItem(item.name);
 
                     if (!categorized[catName]) {
@@ -115,10 +129,10 @@ export default function ItemsPage() {
     });
 
     return (
-        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans p-8">
-            <div className="max-w-[1000px] mx-auto">
+        <WikiLayout>
+            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">
-                    <h1 className="text-[32px] font-serif text-[#ffffff]">Collection Log & Wealth</h1>
+                    <h1 className="text-[32px] font-serif text-[#ffffff]">Lifetime Drops</h1>
                     <div className="text-right">
                         <button
                             onClick={() => setIsIronman(!isIronman)}
@@ -126,7 +140,7 @@ export default function ItemsPage() {
                         >
                             {isIronman ? 'Show GE Prices' : 'Show HA Prices'}
                         </button>
-                        <p className="text-sm text-gray-400 mt-1">Total Collection Value</p>
+                        <p className="text-sm text-gray-400 mt-1">Lifetime Drop Value</p>
                         <p className="text-3xl font-bold text-[#cca052]">{totalWealth.toLocaleString()} gp</p>
                     </div>
                 </div>
@@ -146,17 +160,25 @@ export default function ItemsPage() {
                                     <h2 className="text-xl font-serif text-white">{catName}</h2>
                                     <span className="text-[#cca052] text-sm">{catValue.toLocaleString()} gp</span>
                                 </div>
-                                <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                <table
+                                    className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
                                     <thead>
                                     <tr className="bg-[#2a2a2a] text-white">
-                                        <th className="w-1/2 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                        <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty</th>
-                                        <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
+                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
+                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Acquired From</th>
+                                        <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty</th>
+                                        <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
                                     </tr>
                                     </thead>
                                     <tbody>
                                     {items.sort((a, b) => (b.qty * (isIronman ? b.unitHa : b.unitGe)) - (a.qty * (isIronman ? a.unitHa : a.unitGe))).map((item, idx) => {
                                         const itemValue = Math.floor(item.qty * (isIronman ? item.unitHa : item.unitGe));
+
+                                        const originsArr = Array.from(item.origins);
+                                        const displayOrigins = originsArr.length > 0
+                                            ? originsArr.slice(0, 3).join(', ') + (originsArr.length > 3 ? ', ...' : '')
+                                            : 'Various';
+
                                         return (
                                             <tr key={idx}
                                                 className="border border-[#3a3a3a] hover:bg-[#2a2a2a] transition-colors">
@@ -166,7 +188,11 @@ export default function ItemsPage() {
                                                         {item.name}
                                                     </Link>
                                                 </td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center">{item.qty.toLocaleString()}</td>
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-gray-400 text-xs truncate"
+                                                    title={originsArr.join(', ')}>
+                                                    {displayOrigins}
+                                                </td>
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.qty.toLocaleString()}</td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-right">{itemValue.toLocaleString()}</td>
                                             </tr>
                                         );
@@ -178,6 +204,6 @@ export default function ItemsPage() {
                     })
                 )}
             </div>
-        </div>
+        </WikiLayout>
     );
 }

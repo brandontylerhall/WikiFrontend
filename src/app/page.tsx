@@ -27,6 +27,7 @@ export default function HomePage() {
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
+                .not('log_data->>source', 'in', '("Pickup","Unknown/Pickup","None","Bank")')
                 .order('id', {ascending: false})
                 .limit(100);
 
@@ -62,12 +63,12 @@ export default function HomePage() {
         const trimmed = searchInput.trim();
         if (!trimmed) return;
 
-        const urlSlug = trimmed.replace(/ /g, '_');
+        const urlSlug = trimmed.toLowerCase().replace(/ /g, '_');
 
         const {data} = await supabase
             .from('loot_logs')
             .select('log_data->>category')
-            .ilike('log_data->>source', trimmed)
+            .ilike('log_data->>source', `%${trimmed}%`)
             .limit(1);
 
         if (data && data.length > 0) {
