@@ -4,29 +4,65 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
-import { DatabaseRow, LogItem } from '@/lib/types';
 
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const F2P_SKILLS = [
+    "Attack", "Cooking", "Crafting", "Defence", "Firemaking",
+    "Fishing", "Hitpoints", "Magic", "Mining", "Prayer",
+    "Ranged", "Runecraft", "Smithing", "Strength", "Woodcutting"
+];
+
+const P2P_SKILLS = [
+    "Agility", "Construction", "Farming", "Fletching",
+    "Herblore", "Hunter", "Sailing", "Slayer", "Thieving"
+];
+
+const ALL_SKILLS = [...F2P_SKILLS, ...P2P_SKILLS];
+
+const SkillGrid = ({title, skills, skillStats}: {
+    title: string,
+    skills: string[],
+    skillStats: Record<string, number>
+}) => (
+    <div className="mb-12">
+        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-6">
+            {title}
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            {skills.map(skillName => {
+                const actionCount = skillStats[skillName] || 0;
+                const urlFriendlyName = skillName.replace(/ /g, '_');
+
+                return (
+                    <Link
+                        key={skillName}
+                        href={`/skilling/${urlFriendlyName}`}
+                        className={`border p-4 flex flex-col items-center justify-center transition-all group ${
+                            actionCount > 0
+                                ? "bg-[#1e1e1e] border-[#3a3a3a] hover:bg-[#2a2a2a] hover:border-[#cca052]"
+                                : "bg-[#121212] border-[#222222] opacity-60 hover:opacity-100 hover:border-[#3a3a3a]"
+                        }`}
+                    >
+                        <span
+                            className={`font-bold mb-2 ${actionCount > 0 ? "text-[#729fcf] group-hover:text-[#cca052]" : "text-gray-500"}`}>
+                            {skillName}
+                        </span>
+                        <span
+                            className="text-xs font-mono text-gray-400 bg-[#000000] px-2 py-1 border border-[#3a3a3a] rounded">
+                            Actions: {actionCount.toLocaleString()}
+                        </span>
+                    </Link>
+                );
+            })}
+        </div>
+    </div>
 );
 
-interface SkillStat {
-    skillName: string;
-    totalXp: number;
-    sessionXp: number;
-    actions: number;
-}
-
-const OSRS_SKILLS = new Set([
-    "Woodcutting", "Mining", "Fishing", "Cooking", "Firemaking", "Smithing",
-    "Crafting", "Fletching", "Thieving", "Farming", "Herblore", "Hunter",
-    "Construction", "Agility", "Runecraft", "Slayer"
-]);
-
 export default function SkillingHub() {
-    const [skills, setSkills] = useState<SkillStat[]>([]);
-    const [isOnline, setIsOnline] = useState(false);
+    const [skillStats, setSkillStats] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
@@ -36,81 +72,40 @@ export default function SkillingHub() {
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .or('log_data->>action.eq.XP_GAIN,log_data->>action.eq.GATHER_GAIN')
+                .or('log_data->>category.eq.Skilling,log_data->>category.eq.Combat,log_data->>eventType.eq.XP_GAIN')
                 .order('id', {ascending: false})
-                .limit(10000); // Bumped up slightly to catch more history
+                .limit(20000);
 
-            if (error) {
-                console.error("Supabase error:", error);
-                setIsLoading(false);
-                return;
+            if (error) console.error("Database Error:", error);
+
+            if (data) {
+                const stats: Record<string, number> = {};
+
+                data.forEach(row => {
+                    const log = row.log_data as any;
+
+                    let targetSkill = log?.skill;
+                    if (!targetSkill && log?.category === 'Skilling') {
+                        targetSkill = log?.source;
+                    }
+
+                    const evt = (log?.eventType || log?.action || "").toUpperCase();
+
+                    // Allow XP_GAIN again so Magic/Combat register!
+                    const isValidAction = ['', 'GATHER_GAIN', 'SPELL_CAST', 'RANGED_FIRE', 'XP_GAIN'].includes(evt);
+
+                    if (targetSkill && isValidAction) {
+                        const cleanSkill = targetSkill.charAt(0).toUpperCase() + targetSkill.slice(1).toLowerCase();
+
+                        // NEW: Ensure we aren't accidentally assigning actions to "Highwayman"
+                        if (ALL_SKILLS.includes(cleanSkill)) {
+                            stats[cleanSkill] = (stats[cleanSkill] || 0) + 1;
+                        }
+                    }
+                });
+
+                setSkillStats(stats);
             }
-
-            const skillMap = new Map<string, SkillStat>();
-
-            let activeSessionId: string | null = null;
-            let isCurrentlyOnline = false;
-            let nearestSkillChronologically = "Unknown";
-
-            data?.forEach((row: DatabaseRow) => { // Removed 'any', properly typed!
-                const log = row.log_data;
-
-                // Determine session status from newest record
-                if (!activeSessionId && log.sessionId) {
-                    activeSessionId = log.sessionId;
-                    isCurrentlyOnline = log.action !== 'SESSION_END';
-                    setIsOnline(isCurrentlyOnline);
-                }
-
-                if (log.category !== 'Skilling') return;
-
-                let skillName = log.source || "Unknown";
-
-                if (log.action === 'XP_GAIN' && log.items?.[0]?.name) {
-                    // XP drops always accurately contain the skill name
-                    skillName = log.items[0].name;
-                    nearestSkillChronologically = skillName;
-                } else if (log.action === 'GATHER_GAIN') {
-                    // If the gather action shows "Copper rocks" or "Unknown/Pickup",
-                    // fall back to the most recently tracked XP skill
-                    if (!OSRS_SKILLS.has(skillName)) {
-                        skillName = nearestSkillChronologically;
-                    }
-                }
-
-                // If it's still somehow not a valid skill, skip it so it doesn't create a junk card
-                if (!OSRS_SKILLS.has(skillName)) return;
-
-                if (!skillMap.has(skillName)) {
-                    skillMap.set(skillName, {
-                        skillName,
-                        totalXp: 0,
-                        sessionXp: 0,
-                        actions: 0
-                    });
-                }
-
-                const stat = skillMap.get(skillName)!;
-
-                if (log.action === 'XP_GAIN' && log.items?.[0]) {
-                    const xp = log.items[0].qty;
-                    if (xp > 100_000) return; // sanity
-
-                    stat.totalXp += xp;
-                    if (isCurrentlyOnline && log.sessionId === activeSessionId) {
-                        stat.sessionXp += xp;
-                    }
-                } else if (log.action === 'GATHER_GAIN' && log.items?.length) {
-                    stat.actions += log.items.length;
-                }
-            });
-
-            // Sort by total XP descending
-            const sortedSkills = Array.from(skillMap.values())
-                .filter(s => s.totalXp > 0 || s.actions > 0)
-                .sort((a, b) => b.totalXp - a.totalXp);
-
-            setSkills(sortedSkills);
             setIsLoading(false);
         }
 
@@ -119,57 +114,35 @@ export default function SkillingHub() {
 
     return (
         <WikiLayout>
-            <div className="min-h-screen bg-[#121212] text-[#c8c8c8] p-8">
+            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+                <div className="max-w-[1200px] mx-auto">
 
-                {isLoading ? (
-                    <div className="text-center p-12 border border-[#3a3a3a] bg-[#1e1e1e]">
-                        Loading skilling statistics...
+                    <div className="mb-6 text-sm">
+                        <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
+                        <span className="mx-2 text-gray-500">{'>'}</span>
+                        <span className="text-gray-300">Skilling</span>
                     </div>
-                ) : skills.length === 0 ? (
-                    <div className="text-center p-12 border border-[#3a3a3a] bg-[#1e1e1e] text-gray-400">
-                        No skilling data yet. Start training!
+
+                    <div className="border-b border-[#3a3a3a] pb-4 mb-8">
+                        <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">
+                            Skilling Directory
+                        </h1>
+                        <p className="text-gray-400 mt-2">
+                            Track your gathering yields, resource gains, and skilling activity.
+                        </p>
                     </div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {skills.map((skill) => (
-                            <div key={skill.skillName}
-                                 className="bg-[#1e1e1e] border border-[#3a3a3a] p-6 rounded hover:border-[#cca052] transition-all flex flex-col">
-                                <h2 className="text-2xl font-serif text-white mb-4 border-b border-[#3a3a3a] pb-2">
-                                    {skill.skillName}
-                                </h2>
 
-                                <div className="flex justify-between items-end mb-6">
-                                    <div>
-                                        <div className="text-gray-400 text-sm">Total XP</div>
-                                        <div className="text-3xl font-bold text-[#fbdb71]">
-                                            {skill.totalXp.toLocaleString()}
-                                        </div>
-                                    </div>
-
-                                    {isOnline && skill.sessionXp > 0 && (
-                                        <div className="text-right">
-                                            <div className="text-gray-400 text-sm">This Session</div>
-                                            <div className="text-xl font-bold text-[#90ff90]">
-                                                +{skill.sessionXp.toLocaleString()}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div
-                                    className="mt-auto pt-4 border-t border-[#3a3a3a] flex justify-between text-sm">
-                                    <span className="text-gray-400">Actions: {skill.actions.toLocaleString()}</span>
-                                    <Link
-                                        href={`/skilling/${skill.skillName.replace(/ /g, '_')}`}
-                                        className="text-[#729fcf] hover:underline"
-                                    >
-                                        View Details →
-                                    </Link>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                    {isLoading ? (
+                        <div className="text-center p-12 text-gray-500 italic border border-[#3a3a3a] bg-[#1e1e1e]">
+                            Scanning skilling records...
+                        </div>
+                    ) : (
+                        <>
+                            <SkillGrid title="Free-to-Play Skills" skills={F2P_SKILLS} skillStats={skillStats}/>
+                            <SkillGrid title="Members Skills" skills={P2P_SKILLS} skillStats={skillStats}/>
+                        </>
+                    )}
+                </div>
             </div>
         </WikiLayout>
     );

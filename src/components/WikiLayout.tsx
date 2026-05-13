@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -11,7 +11,30 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default function WikiLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
+    const pathname = usePathname();
     const [searchInput, setSearchInput] = useState("");
+
+    // The foolproof useEffect method. Next.js can't overwrite this anymore!
+    useEffect(() => {
+        let pageTitle = "Home";
+
+        if (pathname) {
+            const segments = pathname.split('/').filter(Boolean);
+            if (segments.length > 0) {
+                const rawSlug = segments[segments.length - 1];
+                const cleanName = decodeURIComponent(rawSlug).replace(/_/g, ' ');
+                pageTitle = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+
+                if (pageTitle.toLowerCase() === 'items') pageTitle = "Item Log";
+                if (pageTitle.toLowerCase() === 'monsters') pageTitle = "Bestiary";
+                if (pageTitle.toLowerCase() === 'skilling') pageTitle = "Experience Hub";
+                if (pageTitle.toLowerCase() === 'combat') pageTitle = "Combat & XP";
+                if (pageTitle.toLowerCase() === 'bank') pageTitle = "Live Bank";
+            }
+        }
+
+        document.title = `${pageTitle} - OSRS Live`;
+    }, [pathname]);
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -47,7 +70,7 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
                 </div>
                 <nav className="flex-1 p-4 flex flex-col gap-2">
                     <Link href="/monsters" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Bestiary</Link>
-                    <Link href="/skilling" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Skilling</Link>
+                    <Link href="/skilling" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Experience Hub</Link>
                     <Link href="/items" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Item Log</Link>
                     <Link href="/combat" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Combat & XP</Link>
                     <Link href="/bank" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Live Bank</Link>

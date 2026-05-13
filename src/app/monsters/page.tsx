@@ -3,6 +3,7 @@
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
+import WikiLayout from "@/components/WikiLayout";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -48,8 +49,8 @@ export default function MonstersHub() {
     const sortedMonsters = Object.entries(monsterStats).sort((a, b) => a[0].localeCompare(b[0]));
 
     return (
-        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans p-8">
-            <div className="max-w-[1000px] mx-auto">
+        <WikiLayout>
+            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
 
                 {/* Breadcrumb */}
                 <div className="mb-6 text-sm">
@@ -100,6 +101,6 @@ export default function MonstersHub() {
                     </div>
                 )}
             </div>
-        </div>
+        </WikiLayout>
     );
 }

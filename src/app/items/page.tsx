@@ -130,8 +130,16 @@ export default function ItemsPage() {
     return (
         <WikiLayout>
             <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+
+                {/* Breadcrumb */}
+                <div className="mb-6 text-sm">
+                    <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
+                    <span className="mx-2 text-gray-500">{'>'}</span>
+                    <span className="text-gray-300">Items</span>
+                </div>
+
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">
-                    <h1 className="text-[32px] font-serif text-[#ffffff]">Lifetime Drops</h1>
+                    <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">Lifetime Drops</h1>
                     <div className="text-right">
                         <button
                             onClick={() => setIsIronman(!isIronman)}
@@ -164,7 +172,9 @@ export default function ItemsPage() {
                                     <thead>
                                     <tr className="bg-[#2a2a2a] text-white">
                                         <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Acquired From</th>
+                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Acquired
+                                            From
+                                        </th>
                                         <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty</th>
                                         <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
                                     </tr>
