@@ -90,7 +90,8 @@ export default function MonstersHub() {
                                   <span className="font-bold text-[#729fcf] group-hover:text-[#cca052]">
                                     {displayTitle}
                                   </span>
-                                    <span className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a]">
+                                    <span
+                                        className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a]">
                                     KC: {killCount.toLocaleString()}
                                   </span>
                                 </Link>

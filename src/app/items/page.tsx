@@ -40,16 +40,19 @@ export default function ItemsPage() {
                 const itemMap: Record<string, ProcessedItem> = {};
 
                 data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
+                    const log = row.log_data as any; // Cast to bypass strict types for a moment
 
                     if (log.items) {
                         const category = log.category || "Unknown";
                         const source = log.source || "";
                         const regionId = log.regionId;
 
-                        // Define what actions actually count towards your "Lifetime Drops" qty
-                        const ALLOWED_ITEM_ACTIONS = [null, 'GATHER_GAIN', 'PICKUP', 'NPC_DROP'];
-                        const isAllowedAction = log.action === undefined || ALLOWED_ITEM_ACTIONS.includes(log.action);
+                        // Grab whatever event key exists (new eventType or old action)
+                        const evt = (log.eventType || log.action || "").toUpperCase();
+
+                        // Only allow actual gains (ignoring TAKE/PICKUP so we don't double count)
+                        const ALLOWED_ITEM_ACTIONS = ['', 'GATHER_GAIN', 'NPC_DROP'];
+                        const isAllowedAction = ALLOWED_ITEM_ACTIONS.includes(evt);
 
                         log.items.forEach((item: LogItem) => {
                             const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
@@ -58,18 +61,17 @@ export default function ItemsPage() {
                                 itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0, origins: new Set()};
                             }
 
-                            // 1. EXTRACT PRICES FROM *EVERY* LOG (Including Bank Snapshots!)
                             const itemGE = item.GE || 0;
                             const itemHA = item.HA || 0;
 
                             if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
                             if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
 
-                            // 2. ONLY INCREMENT QUANTITY/ORIGIN IF IT WAS ACTUALLY A DROP/GATHER
+                            // Only increment if it wasn't dropped, consumed, or picked up
                             if (isAllowedAction) {
                                 itemMap[name].qty += item.qty;
 
-                                if (category === 'Combat' || log.action === 'NPC_DROP') {
+                                if (category === 'Combat' || evt === 'NPC_DROP') {
                                     if (source && !["none", "pickup", "unknown/pickup", "bank", "unknown"].includes(source.toLowerCase())) {
                                         itemMap[name].origins.add(source);
                                     }
@@ -87,7 +89,6 @@ export default function ItemsPage() {
                 const categorized: Record<string, ProcessedItem[]> = {};
 
                 Object.values(itemMap).forEach(item => {
-                    // Only show items that actually have a quantity gathered
                     if (item.qty <= 0) return;
 
                     if (item.name === "Coins" && item.unitGe === 0) {
@@ -95,8 +96,6 @@ export default function ItemsPage() {
                         item.unitHa = 1;
                     }
 
-                    // Dynamically pass the category (Skilling vs Combat) based on origin context if needed
-                    // For global item maps, leaving it to default works beautifully with the new regex
                     const catName = categorizeItem(item.name);
 
                     if (!categorized[catName]) {

@@ -237,7 +237,8 @@ export default function IndividualMonsterPage() {
                 .from('loot_logs')
                 .select('log_data')
                 .ilike('log_data->>source', targetName)
-                .eq('log_data->>action', 'NPC_DROP')
+                // FIX: Check for BOTH the old 'action' key and the new 'eventType' key!
+                .or('log_data->>action.eq.NPC_DROP,log_data->>eventType.eq.NPC_DROP')
                 .order('id', {ascending: false})
                 .limit(5000);
 

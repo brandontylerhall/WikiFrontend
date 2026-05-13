@@ -68,14 +68,18 @@ export default function IndividualItemPage() {
                 let foundSnapshot = false;
 
                 data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
+                    const log = row.log_data as any;
 
-                    if (log.action && ['CONSUME', 'DESTROY', 'DROP', 'PICKUP'].includes(log.action)) {
+                    // Safely grab the event type
+                    const evt = (log.eventType || log.action || "").toUpperCase();
+
+                    // Immediately kick out drops and takes to prevent double-counting
+                    if (evt && ['CONSUME', 'DESTROY', 'DROP', 'PICKUP', 'TAKE'].includes(evt)) {
                         return;
                     }
 
                     if (log.items && log.items.length > 0) {
-                        log.items.forEach((item) => {
+                        log.items.forEach((item: any) => {
                             const currentName = (item.name || LEGACY_ID_MAP[item.id] || `Unknown`).trim();
                             const targetName = itemNameTarget.trim();
 
@@ -86,7 +90,8 @@ export default function IndividualItemPage() {
                                 if (ge === 0 && itemGE > 0) ge = itemGE / item.qty;
                                 if (ha === 0 && itemHA > 0) ha = itemHA / item.qty;
 
-                                if (log.action === 'BANK_SNAPSHOT') {
+                                // Route bank storage using evt instead of action
+                                if (evt === 'BANK_SNAPSHOT') {
                                     if (!foundSnapshot) {
                                         snapshotBase = item.qty;
                                         foundSnapshot = true;
@@ -94,11 +99,11 @@ export default function IndividualItemPage() {
                                     return;
                                 }
 
-                                if (log.action === 'BANK_DEPOSIT') {
+                                if (evt === 'BANK_DEPOSIT') {
                                     if (!foundSnapshot) recentDeposits += item.qty;
                                     return;
                                 }
-                                if (log.action === 'BANK_WITHDRAWAL') {
+                                if (evt === 'BANK_WITHDRAWAL') {
                                     if (!foundSnapshot) recentWithdrawals += item.qty;
                                     return;
                                 }
@@ -119,7 +124,6 @@ export default function IndividualItemPage() {
                                 statsMap[source].quantityDropped += item.qty;
                                 statsMap[source].timesDropped += 1;
 
-                                // Track the geographic region it was found in!
                                 if (log.regionId) {
                                     statsMap[source].regions.add(String(log.regionId));
                                 }
