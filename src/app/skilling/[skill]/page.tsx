@@ -4,82 +4,43 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
-import {XP_MAP} from '@/lib/constants';
 import WikiLayout from '@/components/WikiLayout';
-import {DatabaseRow, LogItem} from '@/lib/types';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-interface ResourceStat {
+interface SkillingActionStat {
     name: string;
-    qty: number;
-    xpPerItem: number;
     totalXp: number;
-    isXpRow?: boolean;
-    runesUsed?: number;
-    xpDropCount?: number;
-    castTimestamps?: Set<string>;
+    actionCount: number;
 }
 
 export default function IndividualSkillPage() {
     const params = useParams();
     const rawSkill = typeof params?.skill === 'string' ? params.skill : '';
-    const targetSkill = rawSkill.replace(/_/g, ' ');
+    const skillName = rawSkill.replace(/_/g, ' ');
 
-    const [resources, setResources] = useState<ResourceStat[]>([]);
-    const [totalActions, setTotalActions] = useState(0);
-    const [totalXp, setTotalXp] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-
-    const isGatheringSkill = Boolean(XP_MAP[targetSkill]);
-    const isCombatSkill = ["Attack", "Strength", "Defence", "Hitpoints", "Ranged", "Magic"].includes(targetSkill);
-
-    const skillFilters: Record<string, (name: string) => boolean> = {
-        "Fishing": (name) => {
-            const lower = name.toLowerCase();
-            return lower.startsWith("raw ") || lower.includes("shrimp") || lower.includes("anchovies") ||
-                lower.includes("trout") || lower.includes("salmon") || lower.includes("tuna") ||
-                lower.includes("lobster") || lower.includes("swordfish") || lower.includes("shark") ||
-                lower.includes("monkfish") || lower.includes("karambwan") || lower.includes("anglerfish");
-        },
-        "Cooking": (name) => {
-            const lower = name.toLowerCase();
-            return !lower.includes("burnt") && (
-                lower.includes("lobster") || lower.includes("shrimp") || lower.includes("anchovies") ||
-                lower.includes("trout") || lower.includes("salmon") || lower.includes("tuna") ||
-                lower.includes("swordfish") || lower.includes("shark") || lower.includes("karambwan") ||
-                lower.includes("monkfish") || lower.includes("anglerfish") || lower.includes("manta ray") ||
-                lower.includes("meat") || lower.includes("chicken") || lower.includes("pie") || lower.includes("pizza")
-            );
-        },
-        "Woodcutting": (name) => name.toLowerCase().includes("logs") || name.toLowerCase().includes("bird nest"),
-        "Mining": (name) => {
-            const lower = name.toLowerCase();
-            return lower.includes("ore") || lower.includes("coal") || lower.includes("gem") ||
-                lower.includes("rune essence") || lower.includes("clay") || lower.includes("bar") ||
-                lower.includes("granite") || lower.includes("sandstone") || lower.includes("amethyst") ||
-                lower.includes("minerals") || lower.includes("salt") || lower.includes("barronite");
-        },
-        "Firemaking": (name) => name.toLowerCase().includes("logs"),
-        "Smithing": (name) => {
-            const lower = name.toLowerCase();
-            return lower.includes("ore") || lower.includes("bar") || lower.includes("deposit");
-        },
-    };
+    const [totalSkillXp, setTotalSkillXp] = useState(0);
+    const [actionStats, setActionStats] = useState<SkillingActionStat[]>([]);
 
     useEffect(() => {
         async function fetchSkillData() {
             setIsLoading(true);
 
+            // Fetch both XP gains for this skill AND spell casts if it's Magic
+            const query = skillName === "Magic"
+                ? `log_data->>skill.eq.Magic,log_data->>eventType.eq.SPELL_CAST`
+                : `log_data->>skill.eq.${skillName}`;
+
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .or('log_data->>category.eq.Skilling,log_data->>category.eq.Combat,log_data->>action.is.null,log_data->>eventType.eq.XP_GAIN')
+                .or(query)
                 .order('id', {ascending: false})
-                .limit(20000);
+                .limit(15000);
 
             if (error) {
                 console.error(error);
@@ -87,233 +48,71 @@ export default function IndividualSkillPage() {
                 return;
             }
 
-            let absoluteTotalXp = 0;
-            const resMap = new Map<string, ResourceStat>();
+            let xp = 0;
+            const actionsMap = new Map<string, { name: string, totalXp: number, ticks: Set<number> }>();
 
-            const magicXpEvents: { time: number, spell: string }[] = [];
-            if (targetSkill === 'Magic') {
-                data?.forEach((row: DatabaseRow) => {
+            // Pass 1: Build a map of what spell was cast at what exact timestamp
+            const magicCastEvents: { time: number, source: string }[] = [];
+            if (skillName === "Magic") {
+                data?.forEach(row => {
                     const log = row.log_data as any;
-                    if (log.eventType === 'XP_GAIN' && log.skill === 'Magic') {
-                        let rawSource = log.source;
-                        if (rawSource && rawSource !== 'Unknown' && rawSource !== 'Activity') {
-                            if (rawSource.includes("->")) rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                            magicXpEvents.push({ time: new Date(log.timestamp).getTime(), spell: rawSource });
+                    if (log.eventType === 'SPELL_CAST') {
+                        let src = log.source;
+                        if (src && src.includes("->")) src = src.split("->")[0].trim();
+                        if (src && src !== "Generic Magic") {
+                            magicCastEvents.push({ time: new Date(log.timestamp).getTime(), source: src });
                         }
                     }
                 });
             }
 
-            data?.forEach((row: DatabaseRow) => {
+            // Pass 2: Aggregate the XP
+            data?.forEach(row => {
                 const log = row.log_data as any;
-                const action = (log.eventType || log.action || "").toUpperCase();
+                const actionType = log.eventType || "";
+                // The deduplication fix!
+                const tickId = Math.floor(new Date(log.timestamp).getTime() / 600);
 
-                if (action === "XP_GAIN") {
-                    const isTargetSkillMatch = log.skill?.toLowerCase() === targetSkill.toLowerCase();
-
-                    if (isTargetSkillMatch) {
-                        const amount = log.xpGained || (log.items && log.items.length > 0 ? log.items[0].qty : 0);
-
-                        if (amount > 0) {
-                            absoluteTotalXp += amount;
-
-                            if (!isGatheringSkill) {
-                                let rawSource = log.source;
-
-                                if (!rawSource || rawSource === "Unknown" || rawSource === "Activity") {
-                                    return;
-                                }
-
-                                if (rawSource.includes("->")) {
-                                    rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                                }
-
-                                if (!resMap.has(rawSource)) {
-                                    resMap.set(rawSource, { name: rawSource, qty: 0, xpPerItem: 0, totalXp: 0, isXpRow: true, runesUsed: 0, xpDropCount: 0, castTimestamps: new Set() });
-                                }
-
-                                const stat = resMap.get(rawSource)!;
-                                stat.totalXp += amount;
-                                stat.xpDropCount = (stat.xpDropCount || 0) + 1;
-
-                                if (targetSkill !== 'Magic') {
-                                    stat.qty += 1;
-                                }
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                if (action === "SPELL_CAST" && targetSkill === 'Magic') {
-                    let rawSource = log.source || "Generic Magic";
-
+                if (actionType === "XP_GAIN" && log.skill === skillName) {
+                    let rawSource = log.source || "Unknown Activity";
                     const logTime = new Date(log.timestamp).getTime();
-                    const matchingXpEvent = magicXpEvents.find(e => Math.abs(e.time - logTime) < 600);
 
-                    if (matchingXpEvent) {
-                        rawSource = matchingXpEvent.spell;
-                    } else if (rawSource.includes("->")) {
-                        rawSource = rawSource.split("->").pop()?.trim() || rawSource;
+                    // Clean up arrows (e.g. "Wind Strike -> Goblin")
+                    if (rawSource.includes("->")) {
+                        rawSource = rawSource.split("->")[0].trim();
                     }
 
-                    if (!resMap.has(rawSource)) {
-                        resMap.set(rawSource, { name: rawSource, qty: 0, xpPerItem: 0, totalXp: 0, isXpRow: true, runesUsed: 0, xpDropCount: 0, castTimestamps: new Set() });
+                    // The "Generic Magic" Fix! Cross-reference the spell cast list
+                    if (skillName === "Magic" && (rawSource === "Generic Magic" || rawSource === "Activity")) {
+                        const matchingCast = magicCastEvents.find(e => Math.abs(e.time - logTime) < 600);
+                        if (matchingCast) rawSource = matchingCast.source;
                     }
 
-                    const stat = resMap.get(rawSource)!;
-                    stat.castTimestamps!.add(log.timestamp);
-                    stat.qty = stat.castTimestamps!.size;
+                    xp += (log.xpGained || 0);
 
-                    log.items?.forEach((item: LogItem) => {
-                        stat.runesUsed = (stat.runesUsed || 0) + item.qty;
-                    });
-                    return;
+                    if (!actionsMap.has(rawSource)) {
+                        actionsMap.set(rawSource, { name: rawSource, totalXp: 0, ticks: new Set<number>() });
+                    }
+
+                    const stat = actionsMap.get(rawSource)!;
+                    stat.totalXp += (log.xpGained || 0);
+                    stat.ticks.add(tickId);
                 }
-
-                if (action !== 'GATHER_GAIN' && action !== '') return;
-
-                const logSkill = log.skill;
-                const isTargetSkill = logSkill
-                    ? logSkill.toLowerCase() === targetSkill.toLowerCase()
-                    : (log.source || "").toLowerCase() === targetSkill.toLowerCase();
-
-                if (!isTargetSkill) return;
-
-                log.items?.forEach((item: LogItem) => {
-                    const itemName = (item.name || "").trim();
-                    if (!itemName || (skillFilters[targetSkill] && !skillFilters[targetSkill](itemName))) return;
-
-                    const skillMap = XP_MAP[targetSkill] || {};
-                    const xpPerItem = skillMap[itemName] || 0;
-
-                    if (!resMap.has(itemName)) {
-                        resMap.set(itemName, {name: itemName, qty: 0, xpPerItem, totalXp: 0, isXpRow: false});
-                    }
-
-                    const stat = resMap.get(itemName)!;
-                    stat.qty += item.qty;
-                    stat.totalXp += (xpPerItem * item.qty);
-                });
             });
 
-            if (targetSkill === 'Magic') {
-                resMap.forEach(stat => {
-                    if (stat.qty === 0 && stat.xpDropCount) {
-                        stat.qty = stat.xpDropCount;
-                    }
-                });
-            }
+            const finalStats = Array.from(actionsMap.values()).map(stat => ({
+                name: stat.name,
+                totalXp: stat.totalXp,
+                actionCount: stat.ticks.size
+            })).sort((a, b) => b.totalXp - a.totalXp);
 
-            const sorted = Array.from(resMap.values()).sort((a, b) => b.totalXp - a.totalXp);
-            const computedTotalActions = sorted.reduce((sum, r) => sum + r.qty, 0);
-            const theoreticalItemXp = sorted.reduce((sum, r) => sum + r.totalXp, 0);
-
-            setResources(sorted);
-            setTotalActions(computedTotalActions);
-            setTotalXp(absoluteTotalXp > 0 ? absoluteTotalXp : theoreticalItemXp);
+            setTotalSkillXp(xp);
+            setActionStats(finalStats);
             setIsLoading(false);
         }
 
-        if (targetSkill) fetchSkillData();
-    }, [targetSkill, isGatheringSkill]);
-
-    // Split Magic into Combat and Utility
-    const combatSpells = resources.filter(r => targetSkill === 'Magic' && !r.name.toLowerCase().includes('teleport') && !r.name.toLowerCase().includes('enchant') && !r.name.toLowerCase().includes('alchemy'));
-    const utilitySpells = resources.filter(r => targetSkill === 'Magic' && (r.name.toLowerCase().includes('teleport') || r.name.toLowerCase().includes('enchant') || r.name.toLowerCase().includes('alchemy')));
-
-    // Reusable Table Renderer
-    const renderTable = (data: ResourceStat[], title: string) => (
-        <div className="mb-10">
-            <h2 className="text-xl font-serif text-white mb-4 border-b border-[#3a3a3a] pb-2">
-                {title}
-            </h2>
-            <div className="overflow-x-auto bg-[#1e1e1e] border border-[#3a3a3a] rounded">
-                <table className="w-full">
-                    <thead>
-                    <tr className="bg-[#2a2a2a]">
-                        <th className="px-4 py-3 text-left w-1/3">
-                            {isCombatSkill ? (targetSkill === 'Magic' ? "Spell" : "Target") : "Resource"}
-                        </th>
-                        <th className="px-4 py-3 text-center">
-                            {isGatheringSkill ? "Quantity" : "Hits / Casts"}
-                        </th>
-
-                        {targetSkill === 'Magic' ? (
-                            <>
-                                <th className="px-4 py-3 text-center">Runes Consumed</th>
-                                <th className="px-4 py-3 text-center">XP / Rune</th>
-                                <th className="px-4 py-3 text-right">Avg XP / Cast</th>
-                            </>
-                        ) : (
-                            <th className="px-4 py-3 text-right">
-                                {isGatheringSkill ? "XP per Item" : "Avg XP/Action"}
-                            </th>
-                        )}
-
-                        <th className="px-4 py-3 text-right text-[#fbdb71]">Total XP</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {isLoading ? (
-                        <tr>
-                            <td colSpan={targetSkill === 'Magic' ? 6 : 4} className="p-12 text-center text-gray-500">Loading data...</td>
-                        </tr>
-                    ) : data.length === 0 ? (
-                        <tr>
-                            <td colSpan={targetSkill === 'Magic' ? 6 : 4} className="p-12 text-center text-gray-500">
-                                No records found for {title.toLowerCase()}.
-                            </td>
-                        </tr>
-                    ) : (
-                        data.map((r, i) => {
-                            const avgXpPerAction = r.qty > 0 ? (r.totalXp / r.qty).toFixed(1) : 0;
-                            const xpPerRune = r.runesUsed && r.runesUsed > 0 ? (r.totalXp / r.runesUsed).toFixed(1) : "-";
-
-                            return (
-                                <tr key={i} className="border-t border-[#3a3a3a] hover:bg-[#252525]">
-                                    <td className="px-4 py-3">
-                                        {r.isXpRow ? (
-                                            isCombatSkill ? (
-                                                <Link
-                                                    href={targetSkill === 'Magic' ? `/spells/${r.name.replace(/ /g, '_')}` : `/monsters/${r.name.replace(/ /g, '_')}`}
-                                                    className="text-[#729fcf] hover:underline"
-                                                >
-                                                    {r.name}
-                                                </Link>
-                                            ) : (
-                                                <span className="text-[#cca052] font-bold">{r.name}</span>
-                                            )
-                                        ) : (
-                                            <Link href={`/items/${r.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
-                                                {r.name}
-                                            </Link>
-                                        )}
-                                    </td>
-                                    <td className="px-4 py-3 text-center font-medium">{r.qty.toLocaleString()}</td>
-
-                                    {targetSkill === 'Magic' ? (
-                                        <>
-                                            <td className="px-4 py-3 text-center text-gray-400">{r.runesUsed ? r.runesUsed.toLocaleString() : 0}</td>
-                                            <td className="px-4 py-3 text-center font-mono text-[#80c8ff]">{xpPerRune}</td>
-                                            <td className="px-4 py-3 text-right text-gray-400">~{avgXpPerAction}</td>
-                                        </>
-                                    ) : (
-                                        <td className="px-4 py-3 text-right text-gray-400">
-                                            {r.isXpRow ? `~${avgXpPerAction}` : r.xpPerItem}
-                                        </td>
-                                    )}
-
-                                    <td className="px-4 py-3 text-right font-bold text-[#fbdb71]">{r.totalXp.toLocaleString()}</td>
-                                </tr>
-                            );
-                        })
-                    )}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
+        if (skillName) fetchSkillData();
+    }, [skillName]);
 
     return (
         <WikiLayout>
@@ -321,33 +120,108 @@ export default function IndividualSkillPage() {
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link> ›
                     <Link href="/skilling" className="text-[#729fcf] hover:underline">Skilling Hub</Link> ›
-                    <span className="text-gray-300"> {targetSkill}</span>
+                    <span className="text-gray-300"> {skillName}</span>
                 </div>
 
                 <div className="border-b border-[#3a3a3a] pb-6 mb-8 flex justify-between items-end">
                     <div>
-                        <h1 className="text-[32px] font-serif text-white tracking-wide">{targetSkill}</h1>
-                        <p className="text-3xl mt-3 font-bold text-[#90ff90]">
-                            {totalActions.toLocaleString()} {isGatheringSkill ? "resources gathered" : "actions logged"}
+                        <h1 className="text-[32px] font-serif text-white tracking-wide">{skillName}</h1>
+                        <p className="text-lg mt-1 text-gray-400">
+                            Activity Log & Training Breakdown
                         </p>
                     </div>
 
                     <div className="text-right">
                         <div className="text-sm text-gray-400">Total XP Tracked</div>
-                        <div className="text-4xl font-bold text-[#fbdb71]">
-                            {totalXp.toLocaleString()}
-                        </div>
+                        <div className="text-3xl font-bold text-[#90ff90]">{totalSkillXp.toLocaleString()}</div>
                     </div>
                 </div>
 
-                {targetSkill === 'Magic' ? (
-                    <>
-                        {renderTable(combatSpells, "Combat Spells")}
-                        {renderTable(utilitySpells, "Teleports & Utility")}
-                    </>
-                ) : (
-                    renderTable(resources, isGatheringSkill ? "Resources Gathered" : "Combat & Actions")
-                )}
+                <div className="flex flex-col lg:flex-row gap-8 items-start">
+                    <div className="flex-1 w-full order-2 lg:order-1">
+
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Training Methods Used</h2>
+
+                        <div className="overflow-x-auto mb-10">
+                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                <thead>
+                                <tr className="bg-[#2a2a2a] text-white">
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Activity / Source</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#80c8ff]">Actions Logged</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#90ff90]">XP Gained</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {isLoading ? (
+                                    <tr><td colSpan={3} className="p-4 text-center text-gray-500 italic">Scanning ledgers...</td></tr>
+                                ) : actionStats.length === 0 ? (
+                                    <tr><td colSpan={3} className="p-4 text-center text-gray-500 italic">No {skillName} activities logged yet.</td></tr>
+                                ) : (
+                                    actionStats.map((stat, idx) => {
+                                        // Link to the spell page if it's Magic, otherwise a generic items/location link
+                                        const linkTarget = skillName === "Magic"
+                                            ? `/spells/${stat.name.replace(/ /g, '_')}`
+                                            : `/items/${stat.name.replace(/ /g, '_')}`;
+
+                                        return (
+                                            <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
+                                                <td className="border border-[#3a3a3a] px-3 py-2">
+                                                    <Link href={linkTarget} className="text-[#729fcf] hover:underline">
+                                                        {stat.name}
+                                                    </Link>
+                                                </td>
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#80c8ff]">{stat.actionCount.toLocaleString()}</td>
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#90ff90]">+{stat.totalXp.toLocaleString()}</td>
+                                            </tr>
+                                        );
+                                    })
+                                )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
+                        <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
+                            <tbody>
+                            <tr>
+                                <th colSpan={2}
+                                    className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
+                                    {skillName} Overview
+                                </th>
+                            </tr>
+                            <tr>
+                                <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
+                                    <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
+                                        <img
+                                            src={`https://oldschool.runescape.wiki/images/${skillName}_icon.png`}
+                                            alt={skillName}
+                                            className="w-16 h-16 object-contain drop-shadow-md"
+                                            style={{imageRendering: 'pixelated'}}
+                                            loading="lazy"
+                                            onError={(e) => {
+                                                e.currentTarget.style.display = 'none';
+                                            }}
+                                        />
+                                    </div>
+                                </td>
+                            </tr>
+                            <tr className="bg-[#1e1e1e]">
+                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Total Actions</th>
+                                <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">
+                                    {actionStats.reduce((acc, curr) => acc + curr.actionCount, 0).toLocaleString()}
+                                </td>
+                            </tr>
+                            <tr className="bg-[#222222]">
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total XP</th>
+                                <td className="p-2 border border-[#3a3a3a] text-right text-[#90ff90] font-bold">
+                                    +{totalSkillXp.toLocaleString()}
+                                </td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
         </WikiLayout>
     );

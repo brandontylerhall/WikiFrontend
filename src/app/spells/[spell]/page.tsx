@@ -54,7 +54,6 @@ export default function IndividualSpellPage() {
         async function fetchSpellData() {
             setIsLoading(true);
 
-            // FIX: Widen the query to grab ALL Spell Casts and Magic XP events so we can proximity-match them
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
@@ -69,11 +68,11 @@ export default function IndividualSpellPage() {
             }
 
             let xp = 0;
-            const uniqueCasts = new Set<string>();
+            // FIX: Track the Game Tick (number) instead of the raw nanosecond timestamp
+            const uniqueCasts = new Set<number>();
             const runes: Record<string, number> = {};
             const prices: Record<string, RunePricing> = {};
 
-            // Pass 1: Build Time-Proximity Map for Magic XP
             const magicXpEvents: { time: number, spell: string }[] = [];
             data?.forEach(row => {
                 const log = row.log_data as any;
@@ -86,10 +85,10 @@ export default function IndividualSpellPage() {
                 }
             });
 
-            // Pass 2: Process Data
             data?.forEach(row => {
                 const log = row.log_data as any;
                 const action = (log.eventType || log.action || "").toUpperCase();
+                const tickId = Math.floor(new Date(log.timestamp).getTime() / 600);
 
                 if (action === "XP_GAIN" && log.skill === "Magic") {
                     let rawSource = log.source;
@@ -97,15 +96,13 @@ export default function IndividualSpellPage() {
                         if (rawSource.includes("->")) rawSource = rawSource.split("->").pop()?.trim() || rawSource;
                         if (rawSource === spellName) {
                             xp += (log.xpGained || 0);
-                            uniqueCasts.add(log.timestamp);
+                            uniqueCasts.add(tickId);
                         }
                     }
                 }
 
                 if (action === "SPELL_CAST") {
                     let rawSource = log.source || "Generic Magic";
-
-                    // The Magic Fix: Check if a Magic XP event happened within 600ms (1 game tick)
                     const logTime = new Date(log.timestamp).getTime();
                     const matchingXpEvent = magicXpEvents.find(e => Math.abs(e.time - logTime) < 600);
 
@@ -115,9 +112,8 @@ export default function IndividualSpellPage() {
                         rawSource = rawSource.split("->").pop()?.trim() || rawSource;
                     }
 
-                    // If it matches the spell page we are on, tally the runes!
                     if (rawSource === spellName) {
-                        uniqueCasts.add(log.timestamp); // Deduplicate simultaneous rune drops
+                        uniqueCasts.add(tickId);
 
                         log.items?.forEach((item: any) => {
                             const name = item.name;
@@ -230,7 +226,6 @@ export default function IndividualSpellPage() {
                                             <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 font-bold text-[#c8c8c8]">{setup.label}</td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-gray-400">
-                                                    {/* FIX: Renders one rune requirement per line */}
                                                     {Object.entries(setup.reqs).map(([rune, qty], rIdx) => (
                                                         <div key={rIdx}>{qty}x {rune}</div>
                                                     ))}
@@ -292,13 +287,12 @@ export default function IndividualSpellPage() {
                             </tr>
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
-                                    <div
-                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a] overflow-hidden">
+                                    <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
                                         <img
                                             src={`https://oldschool.runescape.wiki/images/${spellName.replace(/ /g, '_')}.png`}
                                             alt={spellName}
                                             className="w-16 h-16 object-contain drop-shadow-md"
-                                            style={{imageRendering: 'pixelated'}} // Keeps the 32x32 OSRS spell icons crispy
+                                            style={{imageRendering: 'pixelated'}}
                                             loading="lazy"
                                             onError={(e) => {
                                                 e.currentTarget.style.display = 'none';
@@ -309,27 +303,20 @@ export default function IndividualSpellPage() {
                                 </td>
                             </tr>
                             <tr>
-                                <th colSpan={2}
-                                    className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Performance Metrics
                                 </th>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Total
-                                    Casts
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Total Casts</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{totalCasts.toLocaleString()}</td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Avg
-                                    XP/Cast
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Avg XP/Cast</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">~{avgXpPerCast.toFixed(1)}</td>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total
-                                    Magic XP
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total Magic XP</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#fbdb71] font-bold">{totalXp.toLocaleString()}</td>
                             </tr>
                             </tbody>

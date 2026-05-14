@@ -102,7 +102,7 @@ export default function MonstersHub() {
                                     className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex justify-between items-center hover:bg-[#2a2a2a] hover:border-[#cca052] transition-colors group"
                                 >
                                     <div className="flex items-center gap-3 overflow-hidden">
-                                        <div className="w-10 h-10 shrink-0 bg-[#121212] border border-[#3a3a3a] rounded flex items-center justify-center overflow-hidden">
+                                        <div className="w-10 h-10 shrink-0  rounded flex items-center justify-center overflow-hidden">
                                             <img
                                                 src={`https://oldschool.runescape.wiki/images/${urlFriendlyName}.png`}
                                                 alt={displayTitle}
@@ -118,7 +118,7 @@ export default function MonstersHub() {
                                         </span>
                                     </div>
                                     <span
-                                        className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a] shrink-0 ml-2">
+                                        className="text-xs font-mono text-gray-400 px-2 py-1 shrink-0 ml-2">
                                         KC: {killCount.toLocaleString()}
                                     </span>
                                 </Link>
