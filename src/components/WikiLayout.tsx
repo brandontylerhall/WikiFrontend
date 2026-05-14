@@ -14,7 +14,6 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
     const pathname = usePathname();
     const [searchInput, setSearchInput] = useState("");
 
-    // The foolproof useEffect method. Next.js can't overwrite this anymore!
     useEffect(() => {
         let pageTitle = "Home";
 
@@ -30,6 +29,8 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
                 if (pageTitle.toLowerCase() === 'skilling') pageTitle = "Experience Hub";
                 if (pageTitle.toLowerCase() === 'combat') pageTitle = "Combat & XP";
                 if (pageTitle.toLowerCase() === 'bank') pageTitle = "Live Bank";
+                if (pageTitle.toLowerCase() === 'magic') pageTitle = "Magic Spells";
+                if (pageTitle.toLowerCase() === 'shops') pageTitle = "Merchants & Shops";
             }
         }
 
@@ -52,6 +53,7 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
         if (data && data.length > 0) {
             const category = data[0].category;
             if (category === 'Skilling') router.push(`/skilling/${urlSlug}`);
+            else if (category === 'Shopping') router.push(`/shops/${urlSlug}`);
             else router.push(`/monsters/${urlSlug}`);
         } else {
             router.push(`/items/${urlSlug}`);
@@ -60,7 +62,7 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
     };
 
     return (
-        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans flex">
+        <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans flex w-full">
             {/* LEFT SIDEBAR (The Wiki Nav) */}
             <div className="w-64 bg-[#1e1e1e] border-r border-[#3a3a3a] shrink-0 hidden md:flex flex-col">
                 <div className="p-6 border-b border-[#3a3a3a]">
@@ -71,17 +73,18 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
                 <nav className="flex-1 p-4 flex flex-col gap-2">
                     <Link href="/monsters" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Bestiary</Link>
                     <Link href="/skilling" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Experience Hub</Link>
+                    <Link href="/skilling/Magic" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Magic Spells</Link>
                     <Link href="/items" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Item Log</Link>
                     <Link href="/combat" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Combat & XP</Link>
-                    <Link href="/bank" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Live Bank</Link>
+                    <Link href="/shops" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Merchants & Shops</Link>
+                    <Link href="/bank" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors mt-4 border-t border-[#3a3a3a] pt-6">Live Bank</Link>
                 </nav>
             </div>
 
             {/* MAIN CONTENT AREA */}
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 w-full">
                 {/* TOP HEADER (Search Bar) */}
                 <header className="h-16 bg-[#1e1e1e] border-b border-[#3a3a3a] flex items-center justify-between px-8 sticky top-0 z-10">
-                    {/* Mobile fallback title */}
                     <div className="md:hidden font-serif text-white">OSRS Live</div>
 
                     <form onSubmit={handleSearch} className="w-full max-w-md ml-auto flex gap-2">
@@ -96,7 +99,7 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
                 </header>
 
                 {/* PAGE CONTENT */}
-                <main className="flex-1 overflow-x-hidden">
+                <main className="flex-1 overflow-x-hidden w-full">
                     {children}
                 </main>
             </div>

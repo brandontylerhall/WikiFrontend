@@ -14,6 +14,15 @@ interface MonsterViewRow {
     kill_count: number;
 }
 
+// List of words that indicate the "monster" is actually a spell
+const SPELL_KEYWORDS = ['strike', 'bolt', 'blast', 'wave', 'surge', 'teleport', 'alchemy', 'enchant', 'crumble', 'generic magic'];
+
+const CONSUMABLE_KEYWORDS = [
+    'shrimp', 'anchovies', 'sardine', 'herring', 'pike', 'trout', 'salmon', 'tuna',
+    'lobster', 'swordfish', 'monkfish', 'shark', 'karambwan', 'anglerfish', 'manta ray',
+    'potion', 'brew', 'meat', 'chicken', 'pie', 'pizza', 'stew', 'wine', 'kebab', 'restore', 'stamina'
+];
+
 export default function MonstersHub() {
     const [monsterStats, setMonsterStats] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
@@ -30,9 +39,15 @@ export default function MonstersHub() {
             if (error) console.error("Database Error:", error);
 
             if (data) {
-                // Properly type the 'row' as the view's output
                 const stats = data.reduce((acc: Record<string, number>, row: MonsterViewRow) => {
-                    if (row.monster_name && !row.monster_name.toLowerCase().includes('pickup')) {
+                    const name = row.monster_name?.toLowerCase() || '';
+
+                    // Filter out pickups, spells, and food!
+                    const isSpell = SPELL_KEYWORDS.some(keyword => name.includes(keyword));
+                    const isConsumable = CONSUMABLE_KEYWORDS.some(keyword => name.includes(keyword));
+                    const isInvalid = name.includes('pickup') || name === 'none' || name === 'unknown';
+
+                    if (row.monster_name && !isSpell && !isConsumable && !isInvalid) {
                         acc[row.monster_name] = row.kill_count;
                     }
                     return acc;
@@ -50,9 +65,7 @@ export default function MonstersHub() {
 
     return (
         <WikiLayout>
-            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
-
-                {/* Breadcrumb */}
+            <div className="w-full p-6 text-[14px] leading-relaxed">
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
@@ -88,13 +101,26 @@ export default function MonstersHub() {
                                     href={`/monsters/${urlFriendlyName}`}
                                     className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex justify-between items-center hover:bg-[#2a2a2a] hover:border-[#cca052] transition-colors group"
                                 >
-                                  <span className="font-bold text-[#729fcf] group-hover:text-[#cca052]">
-                                    {displayTitle}
-                                  </span>
+                                    <div className="flex items-center gap-3 overflow-hidden">
+                                        <div className="w-10 h-10 shrink-0 bg-[#121212] border border-[#3a3a3a] rounded flex items-center justify-center overflow-hidden">
+                                            <img
+                                                src={`https://oldschool.runescape.wiki/images/${urlFriendlyName}.png`}
+                                                alt={displayTitle}
+                                                className="max-w-full max-h-full object-contain"
+                                                loading="lazy"
+                                                onError={(e) => {
+                                                    e.currentTarget.style.display = 'none';
+                                                }}
+                                            />
+                                        </div>
+                                        <span className="font-bold text-[#729fcf] group-hover:text-[#cca052] truncate">
+                                            {displayTitle}
+                                        </span>
+                                    </div>
                                     <span
-                                        className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a]">
-                                    KC: {killCount.toLocaleString()}
-                                  </span>
+                                        className="text-xs font-mono text-gray-400 bg-[#121212] px-2 py-1 border border-[#3a3a3a] shrink-0 ml-2">
+                                        KC: {killCount.toLocaleString()}
+                                    </span>
                                 </Link>
                             );
                         })}

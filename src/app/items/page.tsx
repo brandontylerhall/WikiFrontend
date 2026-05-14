@@ -129,7 +129,7 @@ export default function ItemsPage() {
 
     return (
         <WikiLayout>
-            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+            <div className="w-full p-6 text-[14px] leading-relaxed">
 
                 {/* Breadcrumb */}
                 <div className="mb-6 text-sm">

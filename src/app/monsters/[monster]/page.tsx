@@ -275,7 +275,7 @@ export default function IndividualMonsterPage() {
 
     return (
         <WikiLayout>
-            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+            <div className="w-full p-6 text-[14px] leading-relaxed">
                 <Link href="/monsters" className="text-[#729fcf] hover:underline mb-2 block">{'<'} Back to
                     Bestiary</Link>
 
@@ -474,8 +474,17 @@ export default function IndividualMonsterPage() {
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div
-                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center text-gray-500 italic">
-                                        [Image Placeholder]
+                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a] overflow-hidden">
+                                        <img
+                                            src={`https://oldschool.runescape.wiki/images/${displayTitle.replace(/ /g, '_')}.png`}
+                                            alt={displayTitle}
+                                            className="max-w-[130px] max-h-[130px] object-contain drop-shadow-md"
+                                            loading="lazy"
+                                            onError={(e) => {
+                                                e.currentTarget.style.display = 'none';
+                                                e.currentTarget.parentElement!.innerHTML = '<span class="text-gray-500 italic text-xs">Image Unavailable</span>';
+                                            }}
+                                        />
                                     </div>
                                 </td>
                             </tr>

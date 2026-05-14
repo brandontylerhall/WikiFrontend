@@ -13,6 +13,7 @@ interface DatabaseRow {
     log_data: {
         source?: string;
         category?: string;
+        skill?: string;
     };
 }
 
@@ -27,7 +28,7 @@ export default function HomePage() {
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .not('log_data->>source', 'in', '("Pickup","Unknown/Pickup","None","Bank")')
+                .not('log_data->>source', 'in', ['Pickup', 'Unknown/Pickup', 'None', 'Bank'])
                 .order('id', {ascending: false})
                 .limit(100);
 
@@ -39,8 +40,6 @@ export default function HomePage() {
                     const log = row.log_data as any;
                     const category = log?.category || 'Combat';
 
-                    // If it's a skilling log, the 'name' we show is the Skill (Mining)
-                    // but the link needs to go to /skilling/Mining
                     const targetName = (category === 'Skilling' && log.skill) ? log.skill : log.source;
 
                     if (targetName && !["Pickup", "Unknown/Pickup", "None", "Bank"].includes(targetName)) {
@@ -80,6 +79,8 @@ export default function HomePage() {
 
             if (category === 'Skilling') {
                 router.push(`/skilling/${urlSlug}`);
+            } else if (category === 'Shopping') {
+                router.push(`/shops/${urlSlug}`);
             } else {
                 router.push(`/monsters/${urlSlug}`);
             }
@@ -92,9 +93,7 @@ export default function HomePage() {
 
     return (
         <>
-            <title>OSRS Live - Home</title>
-
-            <div className="min-h-screen bg-[#121212] text-[#c8c8c8] flex flex-col items-center p-8 font-sans">
+            <div className="min-h-screen bg-[#121212] text-[#c8c8c8] flex flex-col items-center p-8 font-sans w-full">
                 <div className="mt-20 text-center mb-12">
                     <h1 className="text-5xl font-serif text-[#ffffff] mb-4 tracking-wide">
                         OSRS Live Analytics
@@ -108,7 +107,7 @@ export default function HomePage() {
                 <form onSubmit={handleSearch} className="w-full max-w-2xl mb-16 flex gap-2">
                     <input
                         type="text"
-                        placeholder="e.g. Greater demon, Woodcutting, Goblin..."
+                        placeholder="e.g. Greater demon, Woodcutting, General store..."
                         value={searchInput}
                         onChange={(e) => setSearchInput(e.target.value)}
                         className="flex-1 bg-[#1e1e1e] border border-[#3a3a3a] text-white px-6 py-4 rounded text-lg focus:outline-none focus:border-[#cca052] transition-colors"
@@ -124,27 +123,30 @@ export default function HomePage() {
                 <div className="w-full max-w-4xl mb-16">
                     <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
                         {/* TOP ROW */}
-                        <Link href="/monsters"
-                              className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                            <span className="group-hover:text-[#cca052]">Monsters</span>
+                        <Link href="/monsters" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Bestiary</span>
                         </Link>
-                        <Link href="/skilling"
-                              className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                            <span className="group-hover:text-[#cca052]">Skilling</span>
+                        <Link href="/skilling" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Skilling Hub</span>
                         </Link>
-                        <Link href="/items"
-                              className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                            <span className="group-hover:text-[#cca052]">Items Log</span>
+                        <Link href="/skilling/Magic" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Magic Spells</span>
                         </Link>
 
-                        {/* BOTTOM ROW */}
-                        <Link href="/bank"
-                              className="md:col-start-2 md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        {/* MIDDLE ROW */}
+                        <Link href="/items" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Items Log</span>
+                        </Link>
+                        <Link href="/combat" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Combat & XP</span>
+                        </Link>
+                        <Link href="/bank" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                             <span className="group-hover:text-[#cca052]">Live Bank</span>
                         </Link>
-                        <Link href="/combat"
-                              className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
-                            <span className="group-hover:text-[#cca052]">Combat & XP</span>
+
+                        {/* BOTTOM ROW (Centered) */}
+                        <Link href="/shops" className="md:col-start-3 md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Merchants & Shops</span>
                         </Link>
                     </div>
                 </div>
@@ -160,19 +162,16 @@ export default function HomePage() {
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                             {recentSources.map((source, idx) => {
-                                const linkPath = source.category === "Skilling" ? "/skilling/" : "/monsters/";
+                                let linkPath = "/monsters/";
+                                if (source.category === "Skilling") linkPath = "/skilling/";
+                                if (source.category === "Shopping") linkPath = "/shops/";
+
                                 const linkUrl = `${linkPath}${source.name.replace(/ /g, '_')}`;
                                 const displayTitle = source.name.charAt(0).toUpperCase() + source.name.slice(1);
 
                                 return (
-                                    <Link
-                                        key={idx}
-                                        href={linkUrl}
-                                        className="block bg-[#1e1e1e] border border-[#3a3a3a] p-4 rounded hover:bg-[#2a2a2a] hover:border-[#cca052] transition-all group"
-                                    >
-                                        <div className="text-[#729fcf] font-bold text-lg group-hover:text-[#cca052]">
-                                            {displayTitle}
-                                        </div>
+                                    <Link key={idx} href={linkUrl} className="block bg-[#1e1e1e] border border-[#3a3a3a] p-4 rounded hover:bg-[#2a2a2a] hover:border-[#cca052] transition-all group">
+                                        <div className="text-[#729fcf] font-bold text-lg group-hover:text-[#cca052]">{displayTitle}</div>
                                         <div className="text-xs text-gray-500 mt-2 flex justify-between">
                                             <span>View Analytics</span>
                                             <span>→</span>

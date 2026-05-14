@@ -114,8 +114,8 @@ export default function SkillingHub() {
 
     return (
         <WikiLayout>
-            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
-                <div className="max-w-[1200px] mx-auto">
+            <div className="w-full p-6 text-[14px] leading-relaxed">
+                <div className="w-full mx-auto">
 
                     <div className="mb-6 text-sm">
                         <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>

@@ -31,13 +31,16 @@ export default function IndividualItemPage() {
     const itemNameTarget = rawTarget.replace(/_/g, ' ');
     const displayTitle = itemNameTarget.charAt(0).toUpperCase() + itemNameTarget.slice(1);
 
+    // ALL useState hooks must live inside the component!
     const [isIronman, setIsIronman] = useState(false);
     const [sourceStats, setSourceStats] = useState<ItemSourceStat[]>([]);
-
     const [totalQuantity, setTotalQuantity] = useState(0);
     const [singleGePrice, setSingleGePrice] = useState(0);
     const [singleHaPrice, setSingleHaPrice] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
+
+    // NEW: Store the item ID for the image fetch
+    const [itemId, setItemId] = useState<number | null>(null);
 
     useEffect(() => {
         async function fetchItemData() {
@@ -76,6 +79,9 @@ export default function IndividualItemPage() {
                             const targetName = itemNameTarget.trim();
 
                             if (currentName.toLowerCase() === targetName.toLowerCase()) {
+
+                                // NEW: Capture the ID on the very first match we find
+                                setItemId((prevId) => prevId || item.id);
 
                                 const itemGE = item.GE || 0;
                                 const itemHA = item.HA || 0;
@@ -179,7 +185,7 @@ export default function IndividualItemPage() {
 
     return (
         <WikiLayout>
-            <div className="max-w-[1200px] p-6 text-[14px] leading-relaxed">
+            <div className="w-full p-6 text-[14px] leading-relaxed">
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
@@ -237,42 +243,63 @@ export default function IndividualItemPage() {
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[14px]">
                             <tbody>
                             <tr>
-                                <th colSpan={2} className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
+                                <th colSpan={2}
+                                    className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
                                     {displayTitle}
                                 </th>
                             </tr>
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
-                                    <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center text-gray-500 italic">
-                                        [Image Placeholder]
+                                    <div
+                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a]">
+                                        {itemId ? (
+                                            <img
+                                                src={`https://static.runelite.net/cache/item/icon/${itemId}.png`}
+                                                alt={displayTitle}
+                                                className="w-16 h-16 object-contain"
+                                                style={{imageRendering: 'pixelated'}} // Keeps the OSRS pixel-art crisp when scaled up
+                                                loading="lazy"
+                                            />
+                                        ) : (
+                                            <span className="text-gray-500 italic text-xs">No Icon Found</span>
+                                        )}
                                     </div>
                                 </td>
                             </tr>
                             <tr>
-                                <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                <th colSpan={2}
+                                    className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Item Properties
                                 </th>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-3 border border-[#3a3a3a] text-left w-1/2 font-normal text-[#c8c8c8]">Total Gathered</th>
+                                <th className="p-3 border border-[#3a3a3a] text-left w-1/2 font-normal text-[#c8c8c8]">Total
+                                    Gathered
+                                </th>
                                 <td className="p-3 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">
                                     {totalQuantity.toLocaleString()}
                                 </td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Exchange Price</th>
+                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Exchange
+                                    Price
+                                </th>
                                 <td className="p-3 border border-[#3a3a3a] text-right text-[#ffffff]">
                                     {Math.floor(singleGePrice).toLocaleString()} gp
                                 </td>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">High Alch</th>
+                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">High
+                                    Alch
+                                </th>
                                 <td className="p-3 border border-[#3a3a3a] text-right text-[#ffffff]">
                                     {Math.floor(singleHaPrice).toLocaleString()} gp
                                 </td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Lifetime Value</th>
+                                <th className="p-3 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Lifetime
+                                    Value
+                                </th>
                                 <td className="p-3 border border-[#3a3a3a] text-right text-[#fbdb71] font-bold">
                                     {Math.floor(totalValue).toLocaleString()} gp
                                 </td>
