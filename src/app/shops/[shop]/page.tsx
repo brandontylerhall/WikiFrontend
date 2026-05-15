@@ -32,7 +32,7 @@ interface StockItem {
     storeBasePrice: number;
     presenceScore: number;
     isLikelyJunk: boolean;
-    sortIndex: number; // NEW
+    sortIndex: number;
 }
 
 export default function IndividualShopPage() {
@@ -87,10 +87,42 @@ export default function IndividualShopPage() {
 
                 if (!transactions[ts]) transactions[ts] = {bought: [], sold: [], spent: [], received: []};
 
+                // Legacy fallback parsing
                 if (action === 'SHOP_BUY') transactions[ts].bought.push(...(log.items || []));
                 if (action === 'SHOP_SELL') transactions[ts].sold.push(...(log.items || []));
                 if (action === 'SHOP_SPEND') transactions[ts].spent.push(...(log.items || []));
                 if (action === 'SHOP_RECEIVE') transactions[ts].received.push(...(log.items || []));
+
+                // NEW: Parse the modern SHOP_TRANSACTION format
+                if (action === 'SHOP_TRANSACTION') {
+                    const gained = log.items || [];
+                    let lostQty = 0;
+                    let lostName = "Unknown";
+
+                    // Extract what was spent from the note string
+                    if (log.note && log.note.includes("Spent:")) {
+                        const match = log.note.match(/Spent:\s*(\d+)x\s*(.*)/);
+                        if (match) {
+                            lostQty = parseInt(match[1], 10);
+                            lostName = match[2] ? match[2].trim() : "Coins";
+                        }
+                    }
+
+                    // Smart detection: If we gained Coins, it was a Sell action. Otherwise, a Buy action.
+                    const gainedCoins = gained.find((i: any) => i.name === "Coins");
+
+                    if (gainedCoins) {
+                        transactions[ts].received.push(...gained);
+                        if (lostQty > 0) {
+                            transactions[ts].sold.push({name: lostName, qty: lostQty});
+                        }
+                    } else {
+                        transactions[ts].bought.push(...gained);
+                        if (lostQty > 0) {
+                            transactions[ts].spent.push({name: lostName, qty: lostQty});
+                        }
+                    }
+                }
             });
 
             // --- DATA SCIENCE: TIME-CLUSTERED SNAPSHOTS ---
@@ -136,7 +168,6 @@ export default function IndividualShopPage() {
 
             const totalVisits = distinctVisits.length;
 
-            // NEW: Added sortIndex to the tracking map
             const itemPresence: Record<string, {
                 presenceCount: number,
                 maxQty: number,
@@ -145,7 +176,6 @@ export default function IndividualShopPage() {
             }> = {};
 
             distinctVisits.forEach(visitItems => {
-                // NEW: Grab the index from the array
                 visitItems.forEach((item: any, index: number) => {
                     const itemName = item.name;
                     if (!itemPresence[itemName]) {
@@ -158,7 +188,6 @@ export default function IndividualShopPage() {
                             sortIndex: item.sortIndex !== undefined ? item.sortIndex : index
                         };
                     } else {
-                        // Base stock is always at the top. Save the lowest slot index seen.
                         itemPresence[itemName].sortIndex = Math.min(itemPresence[itemName].sortIndex, item.sortIndex !== undefined ? item.sortIndex : index);
                     }
 
@@ -189,7 +218,7 @@ export default function IndividualShopPage() {
                         sortIndex: data.sortIndex
                     };
                 })
-                .sort((a, b) => a.sortIndex - b.sortIndex); // NEW: Sort by In-Game Slot order
+                .sort((a, b) => a.sortIndex - b.sortIndex);
 
             // --- PROCESS TRANSACTIONS ---
             const boughtMap = new Map<string, ShopItem>();
@@ -375,14 +404,19 @@ export default function IndividualShopPage() {
                                     </tr>
                                 ) : (
                                     boughtItems.map((item, idx) => {
-                                        const avgPrice = Math.round(item.totalCurrency / item.totalQty);
+                                        const exactAvg = item.totalCurrency / item.totalQty;
+                                        const avgDisplay = Number.isInteger(exactAvg) ? exactAvg : `~${Math.round(exactAvg)}`;
+
                                         return (
                                             <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
                                                 <td className="border border-[#3a3a3a] px-3 py-2"><Link
                                                     href={`/items/${item.name.replace(/ /g, '_')}`}
                                                     className="text-[#729fcf] hover:underline">{item.name}</Link></td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">~{avgPrice}</td>
+
+                                                {/* Remove the hardcoded ~ from this <td> */}
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{avgDisplay}</td>
+
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">-{item.totalCurrency.toLocaleString()}</td>
                                             </tr>
                                         );
@@ -425,14 +459,19 @@ export default function IndividualShopPage() {
                                     </tr>
                                 ) : (
                                     soldItems.map((item, idx) => {
-                                        const avgPrice = Math.round(item.totalCurrency / item.totalQty);
+                                        const exactAvg = item.totalCurrency / item.totalQty;
+                                        const avgDisplay = Number.isInteger(exactAvg) ? exactAvg : `~${Math.round(exactAvg)}`;
+
                                         return (
                                             <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
                                                 <td className="border border-[#3a3a3a] px-3 py-2"><Link
                                                     href={`/items/${item.name.replace(/ /g, '_')}`}
                                                     className="text-[#729fcf] hover:underline">{item.name}</Link></td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">~{avgPrice}</td>
+
+                                                {/* Remove the hardcoded ~ from this <td> */}
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{avgDisplay}</td>
+
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">+{item.totalCurrency.toLocaleString()}</td>
                                             </tr>
                                         );

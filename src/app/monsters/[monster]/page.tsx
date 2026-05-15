@@ -190,7 +190,9 @@ export default function IndividualMonsterPage() {
                 const avgQty = totalItemQty / totalDropsOfItem;
                 finalDrops.push({
                     name: `${baseDrop.name} (Average)`,
-                    displayQty: `~${Number.isInteger(avgQty) ? avgQty : avgQty.toFixed(2)}`,
+
+                    displayQty: Number.isInteger(avgQty) ? `${avgQty}` : `~${avgQty.toFixed(2)}`,
+
                     totalQty: totalItemQty,
                     count: totalDropsOfItem,
                     gePrice: baseDrop.gePrice,

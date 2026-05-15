@@ -25,24 +25,33 @@ export default function HomePage() {
 
     useEffect(() => {
         async function fetchRecent() {
+            // FIX 1: Removed the strict Supabase array filter to prevent JSONB syntax errors.
+            // We just grab the latest 150 records and filter them cleanly in JS below.
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .not('log_data->>source', 'in', ['Pickup', 'Unknown/Pickup', 'None', 'Bank'])
                 .order('id', {ascending: false})
-                .limit(100);
+                .limit(150);
 
             if (error) {
                 console.error("Database Error:", error);
             } else if (data) {
                 const uniqueSources = new Map<string, string>();
+
+                // Things we don't want clogging up the "Recently Tracked" section
+                const ignoredSources = [
+                    "Pickup", "Unknown/Pickup", "None", "Bank", "Activity", "NPC / System"
+                ];
+
+                // Ignore categories like talking to random NPCs or random events
+                const ignoredCategories = ["NPC Interaction", "Events & Rewards", "Miscellaneous"];
+
                 data.forEach((row: DatabaseRow) => {
                     const log = row.log_data as any;
                     const category = log?.category || 'Combat';
-
                     const targetName = (category === 'Skilling' && log.skill) ? log.skill : log.source;
 
-                    if (targetName && !["Pickup", "Unknown/Pickup", "None", "Bank"].includes(targetName)) {
+                    if (targetName && !ignoredSources.includes(targetName) && !ignoredCategories.includes(category)) {
                         if (!uniqueSources.has(targetName)) {
                             uniqueSources.set(targetName, category);
                         }
@@ -68,19 +77,22 @@ export default function HomePage() {
 
         const urlSlug = trimmed.toLowerCase().replace(/ /g, '_');
 
+        // FIX 2: Pull the whole log_data object so we can read the category without alias undefined errors
         const {data} = await supabase
             .from('loot_logs')
-            .select('log_data->>category')
+            .select('log_data')
             .ilike('log_data->>source', `%${trimmed}%`)
             .limit(1);
 
         if (data && data.length > 0) {
-            const category = data[0].category;
+            const category = (data[0].log_data as any).category;
 
             if (category === 'Skilling') {
                 router.push(`/skilling/${urlSlug}`);
             } else if (category === 'Shopping') {
                 router.push(`/shops/${urlSlug}`);
+            } else if (category === 'Quests') {
+                router.push(`/quests/${urlSlug}`);
             } else {
                 router.push(`/monsters/${urlSlug}`);
             }
@@ -144,9 +156,12 @@ export default function HomePage() {
                             <span className="group-hover:text-[#cca052]">Live Bank</span>
                         </Link>
 
-                        {/* BOTTOM ROW (Centered) */}
-                        <Link href="/shops" className="md:col-start-3 md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                        {/* BOTTOM ROW (Centered with the new Quest Journal!) */}
+                        <Link href="/shops" className="md:col-start-2 md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                             <span className="group-hover:text-[#cca052]">Merchants & Shops</span>
+                        </Link>
+                        <Link href="/quests" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                            <span className="group-hover:text-[#cca052]">Quest Journal</span>
                         </Link>
                     </div>
                 </div>
@@ -162,9 +177,11 @@ export default function HomePage() {
                     ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                             {recentSources.map((source, idx) => {
+                                // Dynamically route the recent activity box based on category
                                 let linkPath = "/monsters/";
                                 if (source.category === "Skilling") linkPath = "/skilling/";
                                 if (source.category === "Shopping") linkPath = "/shops/";
+                                if (source.category === "Quests") linkPath = "/quests/";
 
                                 const linkUrl = `${linkPath}${source.name.replace(/ /g, '_')}`;
                                 const displayTitle = source.name.charAt(0).toUpperCase() + source.name.slice(1);
