@@ -13,28 +13,58 @@ const supabase = createClient(
 
 export default function QuestsHub() {
     const [questStates, setQuestStates] = useState<Record<string, string>>({});
+    const [totalQP, setTotalQP] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
+
+    // NEW: State for our error popup
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     useEffect(() => {
         async function fetchQuestProgress() {
             setIsLoading(true);
+
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
-                .eq('log_data->>eventType', 'QUEST_PROGRESS')
-                .order('id', {ascending: true}); // Ascending so FINISHED overwrites IN_PROGRESS
+                .eq('log_data->>category', 'Quests')
+                .order('id', {ascending: true});
 
             if (error) console.error(error);
 
             if (data) {
                 const states: Record<string, string> = {};
+                const qpMap = new Map<string, number>(); // Map prevents double-counting!
+
+                // Create a strict lookup set of real quest names
+                const validQuestNames = new Set(questList.map((q: any) => q.name));
+
                 data.forEach(row => {
                     const log = row.log_data as any;
-                    if (log.source && log.target) {
-                        states[log.source] = log.target; // "Cook's Assistant": "FINISHED"
+                    const source = log.source;
+
+                    // 1. Completely ignore ghost NPCs and legacy bugged logs
+                    if (!source || !validQuestNames.has(source)) return;
+
+                    if (log.eventType === 'QUEST_PROGRESS' && log.target) {
+                        states[source] = log.target;
+                    }
+
+                    if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
+                        log.items.forEach((item: any) => {
+                            if (item.name === "Quest point") {
+                                // 2. Map ensures a quest can only grant points ONCE
+                                qpMap.set(source, item.qty);
+                                states[source] = "FINISHED";
+                            }
+                        });
                     }
                 });
+
                 setQuestStates(states);
+
+                // Sum up the sanitized, deduplicated points
+                const calculatedQP = Array.from(qpMap.values()).reduce((a, b) => a + b, 0);
+                setTotalQP(calculatedQP);
             }
             setIsLoading(false);
         }
@@ -51,19 +81,52 @@ export default function QuestsHub() {
         return "text-[#ff6666]"; // NOT_STARTED
     };
 
+    // NEW: Function to trigger the error toast
+    const handleLockedQuestClick = (questName: string) => {
+        setErrorMessage(`You have not encountered "${questName}" yet. Embark on the adventure in-game first!`);
+
+        // Auto-hide the message after 3 seconds
+        setTimeout(() => {
+            setErrorMessage(null);
+        }, 3000);
+    };
+
     return (
         <WikiLayout>
-            <div className="w-full p-6 text-[14px] leading-relaxed">
+            <div className="w-full p-6 text-[14px] leading-relaxed relative">
+
+                {/* NEW: The Error Toast Notification */}
+                {errorMessage && (
+                    <div className="fixed bottom-10 right-10 bg-[#222222] border-l-4 border-[#ff6666] text-white p-4 shadow-2xl z-50 animate-fade-in font-serif">
+                        <span className="font-bold text-[#ff6666] mr-2">Locked:</span>
+                        {errorMessage}
+                    </div>
+                )}
+
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link> ›
                     <span className="text-gray-300"> Quests</span>
                 </div>
 
-                <div className="border-b border-[#3a3a3a] pb-4 mb-8">
-                    <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">
-                        Quest Journal
-                    </h1>
-                    <p className="text-gray-400 mt-2">Track completion times and rewards.</p>
+                <div className="border-b border-[#3a3a3a] pb-4 mb-8 flex flex-col md:flex-row md:justify-between md:items-end gap-4">
+                    <div>
+                        <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">
+                            Quest Journal
+                        </h1>
+                        <p className="text-gray-400 mt-2">Track completion times and rewards.</p>
+                    </div>
+
+                    <div className="text-right">
+                        <div className="text-sm text-gray-400 mb-1">Total Quest Points</div>
+                        <div className="text-3xl font-bold text-[#b080ff] flex items-center justify-end gap-2">
+                            {totalQP.toLocaleString()}
+                            <img
+                                src="https://oldschool.runescape.wiki/images/Quest_point_icon.png"
+                                alt="QP"
+                                className="w-6 h-6 object-contain"
+                            />
+                        </div>
+                    </div>
                 </div>
 
                 {isLoading ? (
@@ -76,6 +139,21 @@ export default function QuestsHub() {
                             <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex flex-col gap-2 font-bold font-serif text-[16px]">
                                 {f2pQuests.map(q => {
                                     const state = questStates[q.name] || "NOT_STARTED";
+
+                                    // NEW: Conditional Rendering based on state
+                                    if (state === "NOT_STARTED") {
+                                        return (
+                                            <button
+                                                key={q.name}
+                                                onClick={() => handleLockedQuestClick(q.name)}
+                                                className={`${getQuestColor(state)} text-left hover:opacity-75 transition-opacity drop-shadow-md cursor-not-allowed`}
+                                            >
+                                                {q.name}
+                                            </button>
+                                        );
+                                    }
+
+                                    // Render normal link for IN_PROGRESS or FINISHED
                                     return (
                                         <Link key={q.name} href={`/quests/${q.name.replace(/ /g, '_')}`} className={`${getQuestColor(state)} hover:underline drop-shadow-md`}>
                                             {q.name}

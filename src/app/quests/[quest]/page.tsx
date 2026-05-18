@@ -16,6 +16,12 @@ interface QuestReward {
     xp: number;
 }
 
+interface WikiMetadata {
+    difficulty: string;
+    length: string;
+    series: string;
+}
+
 export default function IndividualQuestPage() {
     const params = useParams();
     const rawQuest = typeof params?.quest === 'string' ? params.quest : '';
@@ -25,14 +31,19 @@ export default function IndividualQuestPage() {
     const [status, setStatus] = useState("NOT STARTED");
     const [startTime, setStartTime] = useState<Date | null>(null);
     const [finishTime, setFinishTime] = useState<Date | null>(null);
+    const [inGameSeconds, setInGameSeconds] = useState<number | null>(null);
 
     const [xpRewards, setXpRewards] = useState<QuestReward[]>([]);
     const [itemRewards, setItemRewards] = useState<{name: string, qty: number}[]>([]);
+
+    // NEW: State to hold the live Wiki data
+    const [wikiData, setWikiData] = useState<WikiMetadata>({ difficulty: '-', length: '-', series: '-' });
 
     useEffect(() => {
         async function fetchQuestDetails() {
             setIsLoading(true);
 
+            // 1. Fetch your personal Supabase analytics
             const {data: questLogs, error: qError} = await supabase
                 .from('loot_logs')
                 .select('log_data')
@@ -41,49 +52,98 @@ export default function IndividualQuestPage() {
 
             if (qError) {
                 console.error(qError);
-                setIsLoading(false);
-                return;
-            }
+            } else {
+                let start: Date | null = null;
+                let end: Date | null = null;
+                let trackedSeconds: number | null = null;
 
-            let start: Date | null = null;
-            let end: Date | null = null;
+                const xpMap: Record<string, number> = {};
+                const itemMap: Record<string, number> = {};
 
-            const xpMap: Record<string, number> = {};
-            const itemMap: Record<string, number> = {};
+                if (questLogs) {
+                    for (const row of questLogs) {
+                        const log = row.log_data as any;
 
-            if (questLogs) {
-                for (const row of questLogs) {
-                    const log = row.log_data as any;
+                        if (log.eventType === 'QUEST_PROGRESS') {
+                            if (log.target === "IN_PROGRESS" && !start) {
+                                start = new Date(log.timestamp);
+                            }
+                            if (log.target === "FINISHED") {
+                                end = new Date(log.timestamp);
 
-                    if (log.eventType === 'QUEST_PROGRESS') {
-                        if (log.target === "IN_PROGRESS" && !start) {
-                            start = new Date(log.timestamp);
+                                if (log.note && log.note.startsWith("In-Game Ticks: ")) {
+                                    const ticks = parseInt(log.note.replace("In-Game Ticks: ", ""));
+                                    if (!isNaN(ticks) && ticks > 0) {
+                                        trackedSeconds = Math.floor(ticks * 0.6);
+                                    }
+                                }
+                            }
                         }
-                        if (log.target === "FINISHED") {
-                            end = new Date(log.timestamp);
+
+                        if (log.eventType === 'XP_GAIN') {
+                            xpMap[log.skill] = (xpMap[log.skill] || 0) + log.xpGained;
                         }
-                    }
 
-                    if (log.eventType === 'XP_GAIN') {
-                        xpMap[log.skill] = (xpMap[log.skill] || 0) + log.xpGained;
-                    }
-
-                    if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
-                        log.items.forEach((item: any) => {
-                            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-                        });
+                        if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
+                            log.items.forEach((item: any) => {
+                                itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
+                            });
+                        }
                     }
                 }
+
+                setStartTime(start);
+                setFinishTime(end);
+                setInGameSeconds(trackedSeconds);
+
+                if (end) setStatus("FINISHED");
+                else if (start) setStatus("IN PROGRESS");
+
+                setXpRewards(Object.entries(xpMap).map(([skill, xp]) => ({ skill, xp })));
+                setItemRewards(Object.entries(itemMap).map(([name, qty]) => ({ name, qty })));
             }
 
-            setStartTime(start);
-            setFinishTime(end);
+            // 2. NEW: Fetch live metadata via WikiText Parsing
+            try {
+                // MediaWiki APIs prefer underscores instead of spaces for page titles
+                const safeQuestName = encodeURIComponent(questName.replace(/ /g, '_'));
 
-            if (end) setStatus("FINISHED");
-            else if (start) setStatus("IN PROGRESS");
+                // action=parse is the universally supported MediaWiki endpoint
+                const wikiUrl = `https://oldschool.runescape.wiki/api.php?action=parse&page=${safeQuestName}&prop=wikitext&format=json&origin=*`;
 
-            setXpRewards(Object.entries(xpMap).map(([skill, xp]) => ({ skill, xp })));
-            setItemRewards(Object.entries(itemMap).map(([name, qty]) => ({ name, qty })));
+                const res = await fetch(wikiUrl);
+                const data = await res.json();
+
+                // Navigate the JSON to grab the raw wiki code
+                const wikitext = data?.parse?.wikitext?.['*'];
+
+                if (wikitext) {
+                    // Create a mini-parser to grab exact values out of the {{Infobox Quest}}
+                    const extractProp = (propName: string) => {
+                        // Looks for "| difficulty = Novice"
+                        const regex = new RegExp(`\\|\\s*${propName}\\s*=\\s*(.+)`, 'i');
+                        const match = wikitext.match(regex);
+
+                        if (!match) return propName === 'series' ? 'None' : 'Unknown';
+
+                        let val = match[1].trim();
+
+                        // 1. Remove hidden HTML comments like val = val.replace(//g, '').trim();
+                        // 2. Strip out Wiki links [[Target|Display Text]] so it just says "Display Text"
+                        val = val.replace(/\[\[(?:[^\]|]+\|)?([^\]]+)\]\]/g, '$1');
+
+                        return val || (propName === 'series' ? 'None' : 'Unknown');
+                    };
+
+                    setWikiData({
+                        difficulty: extractProp('difficulty'),
+                        length: extractProp('length'),
+                        series: extractProp('series')
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to fetch Wiki metadata", e);
+            }
 
             setIsLoading(false);
         }
@@ -91,20 +151,41 @@ export default function IndividualQuestPage() {
         if (questName) fetchQuestDetails();
     }, [questName]);
 
-    // Calculate Duration string
-    let durationString = "Unknown";
+    // Format Calendar Duration
+    let calendarDuration = "-";
     if (startTime && finishTime) {
-        const diffMs = finishTime.getTime() - startTime.getTime();
-        const minutes = Math.floor(diffMs / 60000);
-        const hours = Math.floor(minutes / 60);
-        const days = Math.floor(hours / 24);
+        const diffSeconds = Math.floor((finishTime.getTime() - startTime.getTime()) / 1000);
+        const days = Math.floor(diffSeconds / 86400);
+        const hours = Math.floor((diffSeconds % 86400) / 3600);
+        const minutes = Math.floor((diffSeconds % 3600) / 60);
+        const seconds = diffSeconds % 60;
 
-        if (days > 0) durationString = `${days} Days, ${hours % 24} Hours`;
-        else if (hours > 0) durationString = `${hours} Hours, ${minutes % 60} Minutes`;
-        else durationString = `${minutes} Minutes`;
+        const parts = [];
+        if (days > 0) parts.push(`${days}d`);
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0) parts.push(`${minutes}m`);
+        if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+
+        calendarDuration = parts.join(' ');
+    } else if (!startTime && status === "FINISHED") {
+        calendarDuration = "Pre-Plugin";
     }
 
-    // --- NEW: Split rewards into categories ---
+    // Format In-Game Duration
+    let inGameDuration = "Untracked";
+    if (inGameSeconds !== null) {
+        const hours = Math.floor(inGameSeconds / 3600);
+        const mins = Math.floor((inGameSeconds % 3600) / 60);
+        const secs = inGameSeconds % 60;
+
+        const parts = [];
+        if (hours > 0) parts.push(`${hours}h`);
+        if (mins > 0) parts.push(`${mins}m`);
+        if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+        inGameDuration = parts.join(' ');
+    }
+
     const questPointsItem = itemRewards.find(i => i.name === "Quest point");
     const standardItems = itemRewards.filter(i => i.name !== "Quest point");
     const questPointsCount = questPointsItem ? questPointsItem.qty : 0;
@@ -132,15 +213,25 @@ export default function IndividualQuestPage() {
                     <div className="flex-1 w-full order-2 lg:order-1">
                         <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Quest Analytics</h2>
 
-                        <div className="grid grid-cols-2 gap-4 mb-8">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                             <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center">
-                                <div className="text-gray-400 text-xs mb-1">Time to Complete (Calendar)</div>
-                                <div className="text-xl font-bold text-white">{durationString}</div>
+                                <div className="text-gray-400 text-xs mb-1">Calendar Time</div>
+                                <div className="text-xl font-bold text-white">{calendarDuration}</div>
+                            </div>
+                            <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center relative group">
+                                <div className="text-[#729fcf] text-xs mb-1">In-Game Time (PC)</div>
+                                <div className="text-xl font-bold text-white">{inGameDuration}</div>
                             </div>
                             <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center">
                                 <div className="text-gray-400 text-xs mb-1">Finish Date</div>
-                                <div className="text-xl font-bold text-white">{finishTime ? finishTime.toLocaleDateString() : "-"}</div>
+                                <div className="text-xl font-bold text-white">
+                                    {finishTime ? finishTime.toLocaleDateString() : (status === "FINISHED" ? "Pre-Plugin" : "-")}
+                                </div>
                             </div>
+                        </div>
+
+                        <div className="text-xs text-gray-500 italic mb-8 border-l-2 border-[#ff6666] pl-3">
+                            NOTE: In-game time can only be accurately tracked whilst actively using the Loot Logger plugin. Mobile progression is tracked via Calendar Time.
                         </div>
 
                         <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Observed Rewards</h2>
@@ -153,8 +244,6 @@ export default function IndividualQuestPage() {
                                 </p>
                             ) : (
                                 <div className="flex flex-col gap-6">
-
-                                    {/* SECTION: Quest Points */}
                                     {questPointsCount > 0 && (
                                         <div>
                                             <h3 className="text-[16px] font-bold text-[#b080ff] mb-2 border-b border-[#3a3a3a] pb-1">Quest Points</h3>
@@ -168,7 +257,6 @@ export default function IndividualQuestPage() {
                                         </div>
                                     )}
 
-                                    {/* SECTION: Experience */}
                                     {xpRewards.length > 0 && (
                                         <div>
                                             <h3 className="text-[16px] font-bold text-[#90ff90] mb-2 border-b border-[#3a3a3a] pb-1">Experience</h3>
@@ -182,14 +270,15 @@ export default function IndividualQuestPage() {
                                         </div>
                                     )}
 
-                                    {/* SECTION: Items */}
                                     {standardItems.length > 0 && (
                                         <div>
                                             <h3 className="text-[16px] font-bold text-[#cca052] mb-2 border-b border-[#3a3a3a] pb-1">Items</h3>
                                             <ul className="list-disc pl-5">
                                                 {standardItems.map((item, idx) => (
                                                     <li key={`item-${idx}`} className="text-white mb-1">
-                                                        <span className="text-[#cca052] font-bold">{item.qty.toLocaleString()}x</span>{' '}
+                                                        {item.qty > 1 && (
+                                                            <><span className="text-[#cca052] font-bold">{item.qty.toLocaleString()}</span>{' '}</>
+                                                        )}
                                                         <Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
                                                             {item.name}
                                                         </Link>
@@ -198,7 +287,6 @@ export default function IndividualQuestPage() {
                                             </ul>
                                         </div>
                                     )}
-
                                 </div>
                             )}
                         </div>
@@ -213,14 +301,87 @@ export default function IndividualQuestPage() {
                                     {questName}
                                 </th>
                             </tr>
+
+                            {/* UPDATED: Your much better image tag logic */}
+                            <tr>
+                                <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
+                                    <div className="mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a] overflow-hidden p-2">
+                                        <img
+                                            src={`https://oldschool.runescape.wiki/images/${questName.replace(/ /g, '_')}.png`}
+                                            alt={questName}
+                                            onError={(e) => {
+                                                e.currentTarget.src = 'https://oldschool.runescape.wiki/images/Quest_point_icon.png';
+                                            }}
+                                            loading="lazy"
+                                        />
+                                    </div>
+                                </td>
+                            </tr>
+
+                            {/* SECTION: Live Wiki Quest Information */}
+                            <tr>
+                                <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                    Quest Information
+                                </th>
+                            </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Started</th>
-                                <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime ? startTime.toLocaleString() : "-"}</td>
+                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Difficulty</th>
+                                <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] capitalize">
+                                    {isLoading ? "..." : wikiData.difficulty}
+                                </td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Finished</th>
-                                <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{finishTime ? finishTime.toLocaleString() : "-"}</td>
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Length</th>
+                                <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] capitalize">
+                                    {isLoading ? "..." : wikiData.length}
+                                </td>
                             </tr>
+                            {wikiData.series !== 'None' && (
+                                <tr className="bg-[#1e1e1e]">
+                                    <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Series</th>
+                                    {/* Changed to standard white text, no link styling */}
+                                    <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">
+                                        {wikiData.series}
+                                    </td>
+                                </tr>
+                            )}
+
+                            {/* SECTION: Your Custom Analytics */}
+                            <tr>
+                                <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                    Analytics
+                                </th>
+                            </tr>
+                            {startTime && finishTime && (
+                                <>
+                                    <tr className="bg-[#1e1e1e]">
+                                        <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Started</th>
+                                        <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime.toLocaleString()}</td>
+                                    </tr>
+                                    <tr className="bg-[#222222]">
+                                        <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Finished</th>
+                                        <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{finishTime.toLocaleString()}</td>
+                                    </tr>
+                                </>
+                            )}
+                            {startTime && !finishTime && (
+                                <tr className="bg-[#1e1e1e]">
+                                    <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Started</th>
+                                    <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime.toLocaleString()}</td>
+                                </tr>
+                            )}
+                            {!startTime && finishTime && (
+                                <tr className="bg-[#1e1e1e]">
+                                    <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Completion Synced</th>
+                                    <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{finishTime.toLocaleDateString()}</td>
+                                </tr>
+                            )}
+                            {!startTime && !finishTime && status === "FINISHED" && (
+                                <tr className="bg-[#1e1e1e]">
+                                    <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Completion</th>
+                                    <td className="p-2 border border-[#3a3a3a] text-right text-gray-400 italic">Pre-Plugin</td>
+                                </tr>
+                            )}
                             </tbody>
                         </table>
                     </div>

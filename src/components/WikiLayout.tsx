@@ -1,15 +1,15 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, {useState, useEffect} from 'react';
 import Link from 'next/link';
-import { useRouter, usePathname } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import {useRouter, usePathname} from 'next/navigation';
+import {createClient} from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-export default function WikiLayout({ children }: { children: React.ReactNode }) {
+export default function WikiLayout({children}: { children: React.ReactNode }) {
     const router = useRouter();
     const pathname = usePathname();
     const [searchInput, setSearchInput] = useState("");
@@ -44,7 +44,7 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
 
         const urlSlug = trimmed.toLowerCase().replace(/ /g, '_');
 
-        const { data } = await supabase
+        const {data} = await supabase
             .from('loot_logs')
             .select('log_data->>category')
             .ilike('log_data->>source', `%${trimmed}%`)
@@ -66,25 +66,47 @@ export default function WikiLayout({ children }: { children: React.ReactNode }) 
             {/* LEFT SIDEBAR (The Wiki Nav) */}
             <div className="w-64 bg-[#1e1e1e] border-r border-[#3a3a3a] shrink-0 hidden md:flex flex-col">
                 <div className="p-6 border-b border-[#3a3a3a]">
-                    <Link href="/" className="text-2xl font-serif text-[#ffffff] hover:text-[#cca052] transition-colors tracking-wide">
+                    <Link href="/"
+                          className="text-2xl font-serif text-[#ffffff] hover:text-[#cca052] transition-colors tracking-wide">
                         OSRS Live
                     </Link>
                 </div>
                 <nav className="flex-1 p-4 flex flex-col gap-2">
-                    <Link href="/monsters" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Bestiary</Link>
-                    <Link href="/skilling" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Experience Hub</Link>
-                    <Link href="/skilling/Magic" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Magic Spells</Link>
-                    <Link href="/items" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Item Log</Link>
-                    <Link href="/combat" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Combat & XP</Link>
-                    <Link href="/shops" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Merchants & Shops</Link>
-                    <Link href="/bank" className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors mt-4 border-t border-[#3a3a3a] pt-6">Live Bank</Link>
+                    <Link href="/monsters"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Bestiary</Link>
+                    <Link href="/skilling"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Experience
+                        Hub</Link>
+                    <Link href="/skilling/Magic"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Magic
+                        Spells</Link>
+                    <Link href="/items"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Item
+                        Log</Link>
+                    <Link href="/combat"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Combat
+                        & XP</Link>
+                    <Link href="/shops"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Merchants
+                        & Shops</Link>
+
+                    {/* NEW: Quest Journal Link */}
+                    <Link href="/quests"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#b080ff] transition-colors flex items-center justify-between">
+                        Quest Journal
+                    </Link>
+
+                    <Link href="/bank"
+                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors mt-4 border-t border-[#3a3a3a] pt-6">Live
+                        Bank</Link>
                 </nav>
             </div>
 
             {/* MAIN CONTENT AREA */}
             <div className="flex-1 flex flex-col min-w-0 w-full">
                 {/* TOP HEADER (Search Bar) */}
-                <header className="h-16 bg-[#1e1e1e] border-b border-[#3a3a3a] flex items-center justify-between px-8 sticky top-0 z-10">
+                <header
+                    className="h-16 bg-[#1e1e1e] border-b border-[#3a3a3a] flex items-center justify-between px-8 sticky top-0 z-10">
                     <div className="md:hidden font-serif text-white">OSRS Live</div>
 
                     <form onSubmit={handleSearch} className="w-full max-w-md ml-auto flex gap-2">
