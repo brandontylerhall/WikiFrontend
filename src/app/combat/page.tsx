@@ -4,10 +4,10 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
+import {DatabaseRow, LogItem} from '@/lib/types';
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
-// --- DATA MODELS ---
 interface SupplyStat {
     name: string;
     qtyUsed: number;
@@ -28,7 +28,11 @@ interface RangedSupplyStat {
     unitHa: number;
 }
 
-// --- CALCULATION HELPERS ---
+const CONSUME_ACTIONS = new Set(['CONSUME', 'COMBAT_CONSUME', 'SKILLING_CONSUME']);
+const MAGIC_ACTIONS = new Set(['SPELL_CAST', 'TELEPORT']);
+const POTION_KEYWORDS = ['potion', 'brew', 'restore', 'stamina', 'antifire', 'serum'];
+const AMMO_KEYWORDS = ['arrow', 'bolt', 'dart', 'knife'];
+
 const calculateCost = (supplies: SupplyStat[], isIronman: boolean) => {
     return supplies.reduce((total, item) => total + (item.qtyUsed * (isIronman ? item.unitHa : item.unitGe)), 0);
 };
@@ -40,7 +44,15 @@ const calculateRangedCost = (supplies: RangedSupplyStat[], isIronman: boolean) =
     }, 0);
 };
 
-// --- COMPONENTS ---
+// Your exact decimal evaluation rule
+const formatDecimal = (num: number): string => {
+    if (Number.isInteger(num)) return num.toString();
+    const str = num.toString();
+    const decimalPart = str.split('.')[1] || '';
+    if (decimalPart.length <= 2) return str;
+    return `~${num.toFixed(1)}`;
+};
+
 const SupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLoading}: {
     title: string, supplies: SupplyStat[], colorClass: string, emptyMsg: string, isIronman: boolean, isLoading: boolean
 }) => {
@@ -117,7 +129,11 @@ const ConsumableTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLo
                         <tr><td colSpan={5} className="p-4 text-center text-gray-500 italic">{emptyMsg}</td></tr>
                     ) : (
                         supplies.map((item, idx) => {
-                            const avgHp = item.qtyUsed > 0 ? (item.hpHealed / item.qtyUsed).toFixed(1) : "0";
+                            // FIX: Resolved variable assignment loop error
+                            let displayAvgHp = "0";
+                            if (item.qtyUsed > 0) {
+                                displayAvgHp = formatDecimal(item.hpHealed / item.qtyUsed);
+                            }
                             return (
                                 <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222] hover:bg-[#333333] transition-colors"}>
                                     <td className="border border-[#3a3a3a] px-2 py-2 truncate">
@@ -125,7 +141,7 @@ const ConsumableTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLo
                                     </td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-white">{item.qtyUsed.toLocaleString()}</td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#90ff90] font-bold">{item.hpHealed.toLocaleString()}</td>
-                                    <td className="border border-[#3a3a3a] px-2 py-2 text-center text-gray-400">~{avgHp}</td>
+                                    <td className="border border-[#3a3a3a] px-2 py-2 text-center text-gray-400">{displayAvgHp}</td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-right text-gray-300">-{Math.floor(item.qtyUsed * (isIronman ? item.unitHa : item.unitGe)).toLocaleString()}</td>
                                 </tr>
                             );
@@ -196,7 +212,6 @@ const RangedSupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, is
     );
 };
 
-// --- MAIN PAGE ---
 export default function CombatHub() {
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
@@ -217,32 +232,35 @@ export default function CombatHub() {
                 const foodMap: Record<string, ConsumableStat> = {};
                 const potionMap: Record<string, ConsumableStat> = {};
 
-                data.forEach((row: any) => {
+                data.forEach((row: DatabaseRow) => {
                     const log = row.log_data;
+                    if (!log) return;
+
                     const action = (log.eventType || log.action || "").toUpperCase();
-
-                    // Allow everything we need to track ammo, runes, and food.
-                    const isConsume = ['CONSUME', 'COMBAT_CONSUME', 'SKILLING_CONSUME'].includes(action);
+                    const isConsume = CONSUME_ACTIONS.has(action);
                     const isTakeOrGround = action === 'TAKE' || (action === 'GATHER_GAIN' && log.source === 'None');
+                    const isMagic = MAGIC_ACTIONS.has(action);
 
-                    if (!['SPELL_CAST', 'RANGED_FIRE', 'TELEPORT'].includes(action) && !isConsume && !isTakeOrGround) return;
+                    if (!isMagic && action !== 'RANGED_FIRE' && !isConsume && !isTakeOrGround) return;
 
-                    log.items?.forEach((item: any) => {
+                    log.items?.forEach((item: LogItem) => {
                         const name = item.name || "Unknown";
                         const lowerName = name.toLowerCase();
 
-                        if (action === 'SPELL_CAST' || action === 'TELEPORT') {
+                        if (isMagic) {
                             if (!magicMap[name]) magicMap[name] = {name, qtyUsed: 0, unitGe: 0, unitHa: 0};
                             magicMap[name].qtyUsed += item.qty;
                             if (magicMap[name].unitGe === 0) magicMap[name].unitGe = (item.GE || 0) / item.qty;
                             if (magicMap[name].unitHa === 0) magicMap[name].unitHa = (item.HA || 0) / item.qty;
                         }
                         else if (isConsume) {
-                            const hpHealed = log.hpHealed || 0;
-                            const isPotion = ['potion', 'brew', 'restore', 'stamina', 'antifire', 'serum'].some(p => lowerName.includes(p));
+                            const hpHealed = (log as any).hpHealed || 0;
+                            const isPotion = POTION_KEYWORDS.some(p => lowerName.includes(p));
 
                             const targetMap = isPotion ? potionMap : foodMap;
-                            if (!targetMap[name]) targetMap[name] = {name, qtyUsed: 0, hpHealed: 0, unitGe: 0, unitHa: 0};
+                            if (!targetMap[name]) targetMap[name] = {
+                                name, qtyUsed: 0, hpHealed: 0, unitGe: 0, unitHa: 0
+                            };
 
                             targetMap[name].qtyUsed += item.qty;
                             targetMap[name].hpHealed += hpHealed;
@@ -250,16 +268,20 @@ export default function CombatHub() {
                             if (targetMap[name].unitHa === 0) targetMap[name].unitHa = (item.HA || 0) / item.qty;
                         }
                         else if (action === 'RANGED_FIRE') {
-                            if (!rangedMap[name]) rangedMap[name] = {name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0};
+                            if (!rangedMap[name]) rangedMap[name] = {
+                                name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0
+                            };
                             rangedMap[name].qtyFired += item.qty;
                             if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
                             if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
                         }
                         else if (isTakeOrGround) {
-                            const isAmmo = ['arrow', 'bolt', 'dart', 'knife'].some(a => lowerName.includes(a));
+                            const isAmmo = AMMO_KEYWORDS.some(a => lowerName.includes(a));
 
                             if (isAmmo) {
-                                if (!rangedMap[name]) rangedMap[name] = {name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0};
+                                if (!rangedMap[name]) rangedMap[name] = {
+                                    name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0
+                                };
                                 rangedMap[name].qtyRetrieved += item.qty;
                                 if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
                                 if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
@@ -268,13 +290,14 @@ export default function CombatHub() {
                     });
                 });
 
-                setMagicSupplies(Object.values(magicMap).sort((a,b) => b.qtyUsed - a.qtyUsed));
-                setRangedSupplies(Object.values(rangedMap).sort((a,b) => b.qtyFired - a.qtyFired));
-                setFoodSupplies(Object.values(foodMap).sort((a,b) => b.qtyUsed - a.qtyUsed));
-                setPotionSupplies(Object.values(potionMap).sort((a,b) => b.qtyUsed - a.qtyUsed));
+                setMagicSupplies(Object.values(magicMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
+                setRangedSupplies(Object.values(rangedMap).sort((a, b) => b.qtyFired - a.qtyFired));
+                setFoodSupplies(Object.values(foodMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
+                setPotionSupplies(Object.values(potionMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
             }
             setIsLoading(false);
         }
+
         fetchCombatLogs();
     }, []);
 
@@ -283,16 +306,15 @@ export default function CombatHub() {
     return (
         <WikiLayout>
             <div className="w-full p-6 text-[14px] leading-relaxed">
-
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
-                    <span className="text-gray-300">Combat</span>
+                    <span className="text-gray-300">Combat Costs</span>
                 </div>
 
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">
                     <div>
-                        <h1 className="text-[32px] font-serif text-[#ffffff]">Account Overhead</h1>
+                        <h1 className="text-[32px] font-serif text-[#ffffff]">Combat Costs</h1>
                         <p className="text-gray-400 mt-2">Lifetime supplies consumed for combat and travel.</p>
                     </div>
                     <div className="text-right">
@@ -304,14 +326,18 @@ export default function CombatHub() {
                     </div>
                 </div>
 
-                <SupplyTable title="Magic & Teleports" supplies={magicSupplies} colorClass="text-[#80c8ff]" emptyMsg="No runes used." isIronman={isIronman} isLoading={isLoading}/>
+                <SupplyTable title="Magic & Teleports" supplies={magicSupplies} colorClass="text-[#80c8ff]"
+                             emptyMsg="No runes used." isIronman={isIronman} isLoading={isLoading}/>
 
-                <RangedSupplyTable title="Ranged Ammunition" supplies={rangedSupplies} colorClass="text-[#90ff90]" emptyMsg="No ammo used." isIronman={isIronman} isLoading={isLoading}/>
+                <RangedSupplyTable title="Ranged Ammunition" supplies={rangedSupplies} colorClass="text-[#90ff90]"
+                                   emptyMsg="No ammo used." isIronman={isIronman} isLoading={isLoading}/>
 
-                <ConsumableTable title="Food" supplies={foodSupplies} colorClass="text-[#cca052]" emptyMsg="No food eaten." isIronman={isIronman} isLoading={isLoading}/>
+                <ConsumableTable title="Food" supplies={foodSupplies} colorClass="text-[#cca052]"
+                                 emptyMsg="No food eaten." isIronman={isIronman} isLoading={isLoading}/>
 
                 {potionSupplies.length > 0 && (
-                    <ConsumableTable title="Potions" supplies={potionSupplies} colorClass="text-[#cca052]" emptyMsg="No potions used." isIronman={isIronman} isLoading={isLoading}/>
+                    <ConsumableTable title="Potions" supplies={potionSupplies} colorClass="text-[#cca052]"
+                                     emptyMsg="No potions used." isIronman={isIronman} isLoading={isLoading}/>
                 )}
             </div>
         </WikiLayout>

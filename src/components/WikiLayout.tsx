@@ -9,6 +9,17 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const TITLE_MAP: Record<string, string> = {
+    'items': "Item Log",
+    'monsters': "Bestiary",
+    'xp': "Skill Progress", // <-- Cleaned up nomenclature
+    'combat': "Combat Costs",
+    'bank': "Live Bank",
+    'magic': "Magic Spells",
+    'shops': "Merchants & Shops",
+    'quests': "Quest Journal"
+};
+
 export default function WikiLayout({children}: { children: React.ReactNode }) {
     const router = useRouter();
     const pathname = usePathname();
@@ -16,24 +27,14 @@ export default function WikiLayout({children}: { children: React.ReactNode }) {
 
     useEffect(() => {
         let pageTitle = "Home";
-
         if (pathname) {
             const segments = pathname.split('/').filter(Boolean);
             if (segments.length > 0) {
                 const rawSlug = segments[segments.length - 1];
                 const cleanName = decodeURIComponent(rawSlug).replace(/_/g, ' ');
-                pageTitle = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
-
-                if (pageTitle.toLowerCase() === 'items') pageTitle = "Item Log";
-                if (pageTitle.toLowerCase() === 'monsters') pageTitle = "Bestiary";
-                if (pageTitle.toLowerCase() === 'skilling') pageTitle = "Experience Hub";
-                if (pageTitle.toLowerCase() === 'combat') pageTitle = "Combat & XP";
-                if (pageTitle.toLowerCase() === 'bank') pageTitle = "Live Bank";
-                if (pageTitle.toLowerCase() === 'magic') pageTitle = "Magic Spells";
-                if (pageTitle.toLowerCase() === 'shops') pageTitle = "Merchants & Shops";
+                pageTitle = TITLE_MAP[cleanName.toLowerCase()] || (cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
             }
         }
-
         document.title = `${pageTitle} - OSRS Live`;
     }, [pathname]);
 
@@ -43,7 +44,6 @@ export default function WikiLayout({children}: { children: React.ReactNode }) {
         if (!trimmed) return;
 
         const urlSlug = trimmed.toLowerCase().replace(/ /g, '_');
-
         const {data} = await supabase
             .from('loot_logs')
             .select('log_data->>category')
@@ -52,7 +52,7 @@ export default function WikiLayout({children}: { children: React.ReactNode }) {
 
         if (data && data.length > 0) {
             const category = data[0].category;
-            if (category === 'Skilling') router.push(`/skilling/${urlSlug}`);
+            if (category === 'Skilling' || category === 'Experience') router.push(`/xp/${urlSlug}`);
             else if (category === 'Shopping') router.push(`/shops/${urlSlug}`);
             else router.push(`/monsters/${urlSlug}`);
         } else {
@@ -63,52 +63,67 @@ export default function WikiLayout({children}: { children: React.ReactNode }) {
 
     return (
         <div className="min-h-screen bg-[#121212] text-[#c8c8c8] font-sans flex w-full">
-            {/* LEFT SIDEBAR (The Wiki Nav) */}
+            {/* LEFT SIDEBAR */}
             <div className="w-64 bg-[#1e1e1e] border-r border-[#3a3a3a] shrink-0 hidden md:flex flex-col">
                 <div className="p-6 border-b border-[#3a3a3a]">
-                    <Link href="/"
-                          className="text-2xl font-serif text-[#ffffff] hover:text-[#cca052] transition-colors tracking-wide">
+                    <Link href="/" className="text-2xl font-serif text-[#ffffff] hover:text-[#cca052] transition-colors tracking-wide">
                         OSRS Live
                     </Link>
                 </div>
-                <nav className="flex-1 p-4 flex flex-col gap-2">
-                    <Link href="/monsters"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Bestiary</Link>
-                    <Link href="/skilling"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Experience
-                        Hub</Link>
-                    <Link href="/skilling/Magic"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Magic
-                        Spells</Link>
-                    <Link href="/items"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Item
-                        Log</Link>
-                    <Link href="/combat"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Combat
-                        & XP</Link>
-                    <Link href="/shops"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">Merchants
-                        & Shops</Link>
 
-                    {/* NEW: Quest Journal Link */}
-                    <Link href="/quests"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#b080ff] transition-colors flex items-center justify-between">
-                        Quest Journal
-                    </Link>
+                <nav className="flex-1 p-4 flex flex-col gap-1 overflow-y-auto">
+                    {/* SECTION 1: Core Gameplay Records */}
+                    <div className="flex flex-col gap-1 pb-4 border-b border-[#3a3a3a]/60">
+                        <Link href="/monsters" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Bestiary</span>
+                            <img src="https://oldschool.runescape.wiki/images/Slayer_icon.png" alt="Bestiary" className="w-5 h-5 object-contain" />
+                        </Link>
+                        <Link href="/xp" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Skill Progress</span>
+                            <img src="https://oldschool.runescape.wiki/images/Stats_icon.png" alt="Progress" className="w-5 h-5 object-contain" />
+                        </Link>
+                        <Link href="/items" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Item Log</span>
+                            <img src="https://oldschool.runescape.wiki/images/Inventory.png" alt="Item Log" className="w-5 h-5 object-contain" />
+                        </Link>
+                    </div>
 
-                    <Link href="/bank"
-                          className="block p-3 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors mt-4 border-t border-[#3a3a3a] pt-6">Live
-                        Bank</Link>
+                    {/* SECTION 2: Resource Burn & Upkeep */}
+                    <div className="flex flex-col gap-1 py-4 border-b border-[#3a3a3a]/60">
+                        <Link href="/combat" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Combat Costs</span>
+                            <img src="https://oldschool.runescape.wiki/images/Super_combat_potion%284%29.png" alt="Combat Costs" className="w-5 h-5 object-contain" />
+                        </Link>
+                        <Link href="/xp/Magic" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Magic Spells</span>
+                            <img src="https://oldschool.runescape.wiki/images/Spellbook.png" alt="Magic Spells" className="w-5 h-5 object-contain" />
+                        </Link>
+                    </div>
+
+                    {/* SECTION 3: World Meta & Progression */}
+                    <div className="flex flex-col gap-1 py-4">
+                        <Link href="/quests" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#b080ff] transition-colors">
+                            <span>Quest Journal</span>
+                            <img src="https://oldschool.runescape.wiki/images/Quest_point_icon.png" alt="Quests" className="w-4 h-4 object-contain" />
+                        </Link>
+                        <Link href="/shops" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Merchants & Shops</span>
+                            <img src="https://oldschool.runescape.wiki/images/General_store_icon.png" alt="Shops" className="w-5 h-5 object-contain" />
+                        </Link>
+                        <Link href="/bank" className="flex items-center justify-between p-2.5 rounded hover:bg-[#2a2a2a] hover:text-[#cca052] transition-colors">
+                            <span>Live Bank</span>
+                            <img src="https://oldschool.runescape.wiki/images/Bank_logo.png" alt="Bank" className="w-5 h-5 object-contain" />
+                        </Link>
+
+                    </div>
+                    {/* SECTION 4: Storage Infrastructure (Isolated Break) */}
+
                 </nav>
             </div>
 
-            {/* MAIN CONTENT AREA */}
             <div className="flex-1 flex flex-col min-w-0 w-full">
-                {/* TOP HEADER (Search Bar) */}
-                <header
-                    className="h-16 bg-[#1e1e1e] border-b border-[#3a3a3a] flex items-center justify-between px-8 sticky top-0 z-10">
+                <header className="h-16 bg-[#1e1e1e] border-b border-[#3a3a3a] flex items-center justify-between px-8 sticky top-0 z-10">
                     <div className="md:hidden font-serif text-white">OSRS Live</div>
-
                     <form onSubmit={handleSearch} className="w-full max-w-md ml-auto flex gap-2">
                         <input
                             type="text"
@@ -119,8 +134,6 @@ export default function WikiLayout({children}: { children: React.ReactNode }) {
                         />
                     </form>
                 </header>
-
-                {/* PAGE CONTENT */}
                 <main className="flex-1 overflow-x-hidden w-full">
                     {children}
                 </main>

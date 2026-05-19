@@ -7,7 +7,7 @@ import Link from 'next/link';
 import {LEGACY_ID_MAP} from '@/lib/constants';
 import regionData from '@/data/regions.json';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow} from '@/lib/types';
+import {DatabaseRow, LogItem} from '@/lib/types';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -23,6 +23,9 @@ interface ItemSourceStat {
     timesDropped: number;
     regions: Set<string>;
 }
+
+// --- OPTIMIZATION CONSTANTS ---
+const IGNORED_ACTIONS = new Set(['CONSUME', 'DESTROY', 'DROP', 'PICKUP', 'TAKE', 'BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'BANK_SNAPSHOT', 'EQUIP', 'UNEQUIP']);
 
 export default function IndividualItemPage() {
     const params = useParams();
@@ -59,15 +62,15 @@ export default function IndividualItemPage() {
                 let ha = 0;
 
                 data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data as any;
+                    const log = row.log_data;
+                    if (!log) return;
+
                     const evt = (log.eventType || log.action || "").toUpperCase();
 
-                    if (evt && ['CONSUME', 'DESTROY', 'DROP', 'PICKUP', 'TAKE', 'BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'BANK_SNAPSHOT', 'EQUIP', 'UNEQUIP'].includes(evt)) {
-                        return;
-                    }
+                    if (evt && IGNORED_ACTIONS.has(evt)) return;
 
                     if (log.items && log.items.length > 0) {
-                        log.items.forEach((item: any) => {
+                        log.items.forEach((item: LogItem) => {
                             const currentName = (item.name || LEGACY_ID_MAP[item.id] || `Unknown`).trim();
                             const targetName = itemNameTarget.trim();
 
@@ -119,21 +122,16 @@ export default function IndividualItemPage() {
 
     const totalValue = totalQuantity * (isIronman ? singleHaPrice : singleGePrice);
 
-    // --- DECOUPLED CATEGORIES ---
     const combatSources = sourceStats.filter(stat => stat.category === 'Combat');
     const skillingSources = sourceStats.filter(stat => stat.category === 'Skilling');
     const shopSources = sourceStats.filter(stat => stat.category === 'Shopping');
-
-    // Standard NPCs only
     const npcSources = sourceStats.filter(stat => ['NPC Interaction', 'Events & Rewards', 'Miscellaneous'].includes(stat.category));
 
-    // Dedicated Quest filter!
     const questSources = sourceStats.filter(stat => {
-        if (displayTitle === "Quest point" && stat.sourceName === "Quest Reward") return false; // Hide legacy bugged rows
+        if (displayTitle === "Quest point" && stat.sourceName === "Quest Reward") return false;
         return stat.category === 'Quests';
     });
 
-    // --- SMART TABLE COMPONENT ---
     const SourceTable = ({sources, emptyMessage, isQuestTable = false}: { sources: ItemSourceStat[], emptyMessage: string, isQuestTable?: boolean }) => {
         if (isLoading) return <div className="p-4 border border-[#3a3a3a] text-center italic text-gray-500 bg-[#1e1e1e]">Scanning logs...</div>;
         if (sources.length === 0) return <div className="p-4 border border-[#3a3a3a] text-center italic text-gray-500 bg-[#1e1e1e]">{emptyMessage}</div>;
@@ -153,10 +151,10 @@ export default function IndividualItemPage() {
                     </thead>
                     <tbody>
                     {sources.map((stat, idx) => {
-                        let linkTarget = `/monsters/${stat.sourceName.replace(/ /g, '_')}`; // Default
+                        let linkTarget = `/monsters/${stat.sourceName.replace(/ /g, '_')}`;
 
                         if (stat.category === "Skilling") {
-                            linkTarget = `/skilling/${stat.skillName ? stat.skillName.replace(/ /g, '_') : stat.sourceName.replace(/ /g, '_')}`;
+                            linkTarget = `/xp/${stat.skillName ? stat.skillName.replace(/ /g, '_') : stat.sourceName.replace(/ /g, '_')}`; // Updated to /xp/!
                         } else if (stat.category === "Shopping") {
                             linkTarget = `/shops/${stat.sourceName.replace(/ /g, '_')}`;
                         } else if (stat.category === "Quests") {
@@ -206,7 +204,7 @@ export default function IndividualItemPage() {
                     <span className="mx-2 text-gray-500">{'>'}</span>
 
                     <Link href={displayTitle === "Quest point" ? "/quests" : "/items"} className="text-[#729fcf] hover:underline">
-                        {displayTitle === "Quest point" ? "Quest Journal" : "Lifetime Drops"}
+                        {displayTitle === "Quest point" ? "Quest Journal" : "Item Log"}
                     </Link>
 
                     <span className="mx-2 text-gray-500">{'>'}</span>
@@ -252,16 +250,13 @@ export default function IndividualItemPage() {
                             {displayTitle === "Quest point" ? "Quest Log" : "Acquisition Sources"}
                         </h2>
 
-                        {/* HIDE COMBAT AND SKILLING IF IT'S A QUEST POINT */}
                         {displayTitle !== "Quest point" && (
                             <>
-                                {/* RENDER COMBAT */}
                                 <h3 className="text-[20px] font-serif text-[#cca052] mb-3 flex items-center gap-2">
                                     Monster Drops
                                 </h3>
                                 <SourceTable sources={combatSources} emptyMessage="No combat drop records found."/>
 
-                                {/* RENDER SKILLING */}
                                 <h3 className="text-[20px] font-serif text-[#90ff90] mb-3 flex items-center gap-2">
                                     Skilling & Gathering
                                 </h3>
@@ -269,7 +264,6 @@ export default function IndividualItemPage() {
                             </>
                         )}
 
-                        {/* RENDER NPCS & DIALOGUE */}
                         {displayTitle !== "Quest point" && npcSources.length > 0 && (
                             <>
                                 <h3 className="text-[20px] font-serif text-[#80c8ff] mb-3 mt-6 flex items-center gap-2">
@@ -279,7 +273,6 @@ export default function IndividualItemPage() {
                             </>
                         )}
 
-                        {/* RENDER QUESTS (Perfect 2-column layout!) */}
                         {(questSources.length > 0 || displayTitle === "Quest point") && (
                             <>
                                 <h3 className="text-[20px] font-serif mb-3 mt-6 flex items-center gap-2">
@@ -293,7 +286,6 @@ export default function IndividualItemPage() {
                             </>
                         )}
 
-                        {/* RENDER SHOPS */}
                         {displayTitle !== "Quest point" && shopSources.length > 0 && (
                             <>
                                 <h3 className="text-[20px] font-serif text-[#ff6666] mb-3 mt-6 flex items-center gap-2">
@@ -304,7 +296,6 @@ export default function IndividualItemPage() {
                         )}
                     </div>
 
-                    {/* WIKI INFOBOX */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[14px]">
                             <tbody>

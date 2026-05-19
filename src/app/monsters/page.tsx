@@ -14,9 +14,7 @@ interface MonsterViewRow {
     kill_count: number;
 }
 
-// List of words that indicate the "monster" is actually a spell
 const SPELL_KEYWORDS = ['strike', 'bolt', 'blast', 'wave', 'surge', 'teleport', 'alchemy', 'enchant', 'crumble', 'generic magic'];
-
 const CONSUMABLE_KEYWORDS = [
     'shrimp', 'anchovies', 'sardine', 'herring', 'pike', 'trout', 'salmon', 'tuna',
     'lobster', 'swordfish', 'monkfish', 'shark', 'karambwan', 'anglerfish', 'manta ray',
@@ -26,6 +24,9 @@ const CONSUMABLE_KEYWORDS = [
 export default function MonstersHub() {
     const [monsterStats, setMonsterStats] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
+    // NEW: Store our dynamically fetched Wiki Images
+    const [wikiImages, setWikiImages] = useState<Record<string, string>>({});
+    const [sortMode, setSortMode] = useState<"alpha" | "kc" | "profit">("alpha");
 
     useEffect(() => {
         async function fetchMonsters() {
@@ -36,13 +37,12 @@ export default function MonstersHub() {
                 .select('*')
                 .order('monster_name', {ascending: true});
 
-            if (error) console.error("Database Error:", error);
-
-            if (data) {
-                const stats = data.reduce((acc: Record<string, number>, row: MonsterViewRow) => {
+            if (error) {
+                console.error("Database Error:", error);
+            } else if (data) {
+                const stats = (data as MonsterViewRow[]).reduce((acc: Record<string, number>, row: MonsterViewRow) => {
                     const name = row.monster_name?.toLowerCase() || '';
 
-                    // Filter out pickups, spells, and food!
                     const isSpell = SPELL_KEYWORDS.some(keyword => name.includes(keyword));
                     const isConsumable = CONSUMABLE_KEYWORDS.some(keyword => name.includes(keyword));
                     const isInvalid = name.includes('pickup') || name === 'none' || name === 'unknown';
@@ -54,6 +54,32 @@ export default function MonstersHub() {
                 }, {});
 
                 setMonsterStats(stats);
+
+                // --- NEW: BATCH FETCH WIKI IMAGES ---
+                const monsterNames = Object.keys(stats);
+                const images: Record<string, string> = {};
+                const chunkSize = 50; // The MediaWiki API allows up to 50 titles per request
+
+                for (let i = 0; i < monsterNames.length; i += chunkSize) {
+                    const chunk = monsterNames.slice(i, i + chunkSize);
+                    // Format names correctly for the Wiki API (e.g. "Greater demon")
+                    const titles = chunk.map(n => encodeURIComponent(n.charAt(0).toUpperCase() + n.slice(1))).join('|');
+
+                    try {
+                        const res = await fetch(`https://oldschool.runescape.wiki/api.php?action=query&titles=${titles}&prop=pageimages&format=json&pithumbsize=200&origin=*`);
+                        const json = await res.json();
+                        if (json.query?.pages) {
+                            Object.values(json.query.pages).forEach((p: any) => {
+                                if (p.title && p.thumbnail?.source) {
+                                    images[p.title.toLowerCase()] = p.thumbnail.source;
+                                }
+                            });
+                        }
+                    } catch (e) {
+                        console.error("Failed to fetch image batch", e);
+                    }
+                }
+                setWikiImages(images);
             }
             setIsLoading(false);
         }
@@ -61,7 +87,25 @@ export default function MonstersHub() {
         fetchMonsters();
     }, []);
 
-    const sortedMonsters = Object.entries(monsterStats).sort((a, b) => a[0].localeCompare(b[0]));
+    const sortedMonsters = Object.entries(monsterStats).sort((a, b) => {
+        const [nameA, kcA] = a;
+        const [nameB, kcB] = b;
+
+        if (sortMode === "alpha") {
+            return nameA.localeCompare(nameB);
+        }
+
+        if (sortMode === "kc") {
+            return kcB - kcA;
+        }
+
+        if (sortMode === "profit") {
+            // Placeholder for now (since you don’t have gp yet)
+            return kcB - kcA;
+        }
+
+        return 0;
+    });
 
     return (
         <WikiLayout>
@@ -69,10 +113,44 @@ export default function MonstersHub() {
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
-                    <span className="text-gray-300">Monsters</span>
+                    <span className="text-gray-300">Bestiary</span>
                 </div>
 
                 <div className="border-b border-[#3a3a3a] pb-4 mb-8">
+                    <div className="flex gap-2 mt-4">
+                        <button
+                            onClick={() => setSortMode("alpha")}
+                            className={`text-xs px-3 py-1 border ${
+                                sortMode === "alpha"
+                                    ? "bg-[#cca052] text-black border-[#cca052]"
+                                    : "bg-[#2a2a2a] border-[#3a3a3a] text-[#c8c8c8] hover:bg-[#3a3a3a]"
+                            }`}
+                        >
+                            A–Z
+                        </button>
+
+                        <button
+                            onClick={() => setSortMode("kc")}
+                            className={`text-xs px-3 py-1 border ${
+                                sortMode === "kc"
+                                    ? "bg-[#cca052] text-black border-[#cca052]"
+                                    : "bg-[#2a2a2a] border-[#3a3a3a] text-[#c8c8c8] hover:bg-[#3a3a3a]"
+                            }`}
+                        >
+                            Kill Count
+                        </button>
+
+                        <button
+                            onClick={() => setSortMode("profit")}
+                            className={`text-xs px-3 py-1 border ${
+                                sortMode === "profit"
+                                    ? "bg-[#cca052] text-black border-[#cca052]"
+                                    : "bg-[#2a2a2a] border-[#3a3a3a] text-[#c8c8c8] hover:bg-[#3a3a3a]"
+                            }`}
+                        >
+                            Profit/Kill
+                        </button>
+                    </div>
                     <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">
                         Bestiary & Combat Logs
                     </h1>
@@ -95,6 +173,9 @@ export default function MonstersHub() {
                             const urlFriendlyName = monsterName.replace(/ /g, '_');
                             const displayTitle = monsterName.charAt(0).toUpperCase() + monsterName.slice(1);
 
+                            // Prefer dynamic image, fallback to hardcoded URL
+                            const imgSrc = wikiImages[monsterName.toLowerCase()] || `https://oldschool.runescape.wiki/images/${urlFriendlyName}.png`;
+
                             return (
                                 <Link
                                     key={monsterName}
@@ -102,9 +183,10 @@ export default function MonstersHub() {
                                     className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex justify-between items-center hover:bg-[#2a2a2a] hover:border-[#cca052] transition-colors group"
                                 >
                                     <div className="flex items-center gap-3 overflow-hidden">
-                                        <div className="w-10 h-10 shrink-0  rounded flex items-center justify-center overflow-hidden">
+                                        <div
+                                            className="w-10 h-10 shrink-0 rounded flex items-center justify-center overflow-hidden">
                                             <img
-                                                src={`https://oldschool.runescape.wiki/images/${urlFriendlyName}.png`}
+                                                src={imgSrc}
                                                 alt={displayTitle}
                                                 className="max-w-full max-h-full object-contain"
                                                 loading="lazy"
@@ -117,8 +199,7 @@ export default function MonstersHub() {
                                             {displayTitle}
                                         </span>
                                     </div>
-                                    <span
-                                        className="text-xs font-mono text-gray-400 px-2 py-1 shrink-0 ml-2">
+                                    <span className="text-xs font-mono text-gray-400 px-2 py-1 shrink-0 ml-2">
                                         KC: {killCount.toLocaleString()}
                                     </span>
                                 </Link>

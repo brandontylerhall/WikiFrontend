@@ -25,14 +25,41 @@ interface RawDropRecord {
     firstKc: number;
 }
 
+// NEW: Extended Drop Interface to handle level chunking
+interface LocalAggregatedDrop extends AggregatedDrop {
+    signature: string;
+    denominator: number;
+}
+
+const formatDecimal = (num: number): string => {
+    if (Number.isInteger(num)) return num.toString();
+    const str = num.toString();
+    const decimalPart = str.split('.')[1] || '';
+    if (decimalPart.length <= 2) return str;
+    return `~${num.toFixed(1)}`;
+};
+
 function getRarity(count: number, total: number) {
     if (total === 0) return "-";
     if (count === total) return "Always";
     const fraction = total / count;
-    return `1/${Number.isInteger(fraction) ? fraction : fraction.toFixed(2)}`;
+    return `1/${formatDecimal(fraction)}`;
 }
 
-// Helper to parse the pipe-delimited examine string
+function formatPercent(value: number) {
+    return `${value.toFixed(1)}%`;
+}
+
+// Converts a raw signature "92, 100" into "Levels 92 and 100"
+function formatSignatureText(sig: string) {
+    if (sig === "Unknown") return "Legacy / Unknown Level";
+    const parts = sig.split(", ");
+    if (parts.length === 1) return `Level ${parts[0]}`;
+    if (parts.length === 2) return `Levels ${parts[0]} and ${parts[1]}`;
+    const last = parts.pop();
+    return `Levels ${parts.join(", ")}, and ${last}`;
+}
+
 function parseMonsterExamine(note: string) {
     const stats = {
         combat: "?", hp: "?",
@@ -98,26 +125,59 @@ export default function IndividualMonsterPage() {
     const [examineStats, setExamineStats] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [totalKills, setTotalKills] = useState(0);
-    const [aggregatedDrops, setAggregatedDrops] = useState<AggregatedDrop[]>([]);
     const [aggregatedLocations, setAggregatedLocations] = useState<AggregatedLocation[]>([]);
+    const [dynamicImageUrl, setDynamicImageUrl] = useState<string | null>(null);
 
-    // FIX: Filtering to ONLY count non-summary rows to prevent double counting
-    const totalValue = aggregatedDrops
-        .filter(drop => !drop.isSummary && drop.name !== "Nothing")
-        .reduce((acc, drop) => acc + ((isIronman ? drop.haPrice : drop.gePrice) * drop.totalQty), 0);
+    // NEW: State for our nested drop structure
+    const [signatureGroups, setSignatureGroups] = useState<Record<string, Record<string, LocalAggregatedDrop[]>>>({});
+    const [signatureDenominators, setSignatureDenominators] = useState<Record<string, number>>({});
+    const [totalValue, setTotalValue] = useState(0);
+    const [searchItem, setSearchItem] = useState("");
 
-    const gpPerKill = totalKills > 0 ? Math.floor(totalValue / totalKills) : 0;
+    useEffect(() => {
+        async function fetchWikiImage() {
+            try {
+                const safeName = encodeURIComponent(targetName);
+                const res = await fetch(`https://oldschool.runescape.wiki/api.php?action=query&titles=${safeName}&prop=pageimages&format=json&pithumbsize=200&origin=*`);
+                const data = await res.json();
+
+                const pages = data.query?.pages;
+                if (pages) {
+                    const firstPage = Object.values(pages)[0] as any;
+                    if (firstPage.thumbnail?.source) {
+                        setDynamicImageUrl(firstPage.thumbnail.source);
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to fetch dynamic wiki image", e);
+            }
+            setDynamicImageUrl(`https://oldschool.runescape.wiki/images/${targetName.replace(/ /g, '_')}.png`);
+        }
+
+        if (targetName !== "Unknown") fetchWikiImage();
+    }, [targetName]);
 
     function processAnalytics(rawData: DatabaseRow[]) {
-        const kills = rawData.length;
+        const validKillLogs = rawData.filter(row => {
+            const act = (row.log_data.eventType || row.log_data.action || "").toUpperCase();
+            return act === 'NPC_DROP';
+        });
+
+        const kills = validKillLogs.length;
         setTotalKills(kills);
 
         const locMap: Record<string, number> = {};
         const firstKcMap: Record<string, number> = {};
 
+        // --- NEW: LEVEL IDENTIFICATION ARRAYS ---
+        const levelKills: Record<string, number> = {};
+        const itemLevels: Record<string, Set<string>> = {};
+
         for (let i = kills - 1; i >= 0; i--) {
             const currentKc = kills - i;
-            const items = rawData[i].log_data.items;
+            const log = validKillLogs[i].log_data;
+            const items = log.items;
 
             if (items) {
                 items.forEach((item: LogItem) => {
@@ -131,16 +191,26 @@ export default function IndividualMonsterPage() {
 
         const rawDropMap: Record<string, RawDropRecord> = {};
 
-        rawData.forEach(row => {
+        validKillLogs.forEach(row => {
             const data = row.log_data;
+            if (!data) return;
+
             const rId = String(data.regionId);
-            locMap[rId] = (locMap[rId] || 0) + 1;
+            if (data.regionId) locMap[rId] = (locMap[rId] || 0) + 1;
+
+            // Track how many of each level we killed
+            const lvl = data.npcLevel ? String(data.npcLevel) : "Unknown";
+            levelKills[lvl] = (levelKills[lvl] || 0) + 1;
 
             if (data.items && data.items.length > 0) {
                 data.items.forEach((item: LogItem) => {
                     const itemName = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
-                    const key = `${itemName}-${item.qty}`;
 
+                    // Track which levels dropped this item
+                    if (!itemLevels[itemName]) itemLevels[itemName] = new Set();
+                    itemLevels[itemName].add(lvl);
+
+                    const key = `${itemName}-${item.qty}`;
                     let geValue = item.GE || 0;
                     let haValue = item.HA || 0;
 
@@ -165,10 +235,33 @@ export default function IndividualMonsterPage() {
                     rawDropMap[key].count += 1;
                 });
             } else {
+                if (!itemLevels["Nothing"]) itemLevels["Nothing"] = new Set();
+                itemLevels["Nothing"].add(lvl);
+
                 if (!rawDropMap["Nothing-0"]) {
                     rawDropMap["Nothing-0"] = {name: "Nothing", qty: 0, count: 0, gePrice: 0, haPrice: 0, firstKc: 0};
                 }
                 rawDropMap["Nothing-0"].count += 1;
+            }
+        });
+
+        // Generate Signatures
+        const itemSignatures: Record<string, string> = {};
+        Object.entries(itemLevels).forEach(([itemName, levels]) => {
+            const sorted = Array.from(levels).sort((a, b) => {
+                if (a === "Unknown") return 1;
+                if (b === "Unknown") return -1;
+                return parseInt(a) - parseInt(b);
+            });
+            itemSignatures[itemName] = sorted.join(", ");
+        });
+
+        // Calculate Denominators for each Signature (Total Kills for that chunk of levels)
+        const sigDenominators: Record<string, number> = {};
+        Object.values(itemSignatures).forEach(sig => {
+            if (!sigDenominators[sig]) {
+                const levels = sig.split(", ");
+                sigDenominators[sig] = levels.reduce((sum, l) => sum + (levelKills[l] || 0), 0);
             }
         });
 
@@ -178,7 +271,7 @@ export default function IndividualMonsterPage() {
             nameGroups[drop.name].push(drop);
         });
 
-        const finalDrops: AggregatedDrop[] = [];
+        const finalDrops: LocalAggregatedDrop[] = [];
 
         Object.values(nameGroups).forEach(drops => {
             drops.sort((a, b) => a.qty - b.qty);
@@ -186,19 +279,22 @@ export default function IndividualMonsterPage() {
             const totalItemQty = drops.reduce((sum, d) => sum + (d.count * d.qty), 0);
             const baseDrop = drops[0];
 
+            const signature = itemSignatures[baseDrop.name];
+            const denominator = sigDenominators[signature];
+
             if (drops.length > 1) {
                 const avgQty = totalItemQty / totalDropsOfItem;
                 finalDrops.push({
                     name: `${baseDrop.name} (Average)`,
-
-                    displayQty: Number.isInteger(avgQty) ? `${avgQty}` : `~${avgQty.toFixed(2)}`,
-
+                    displayQty: formatDecimal(avgQty),
                     totalQty: totalItemQty,
                     count: totalDropsOfItem,
                     gePrice: baseDrop.gePrice,
                     haPrice: baseDrop.haPrice,
                     isSummary: true,
-                    firstKc: Math.min(...drops.map(d => d.firstKc))
+                    firstKc: Math.min(...drops.map(d => d.firstKc)),
+                    signature,
+                    denominator
                 });
             }
 
@@ -230,7 +326,9 @@ export default function IndividualMonsterPage() {
                         gePrice: d.gePrice,
                         haPrice: d.haPrice,
                         isSummary: false,
-                        firstKc: d.firstKc
+                        firstKc: d.firstKc,
+                        signature,
+                        denominator
                     });
                 } else {
                     const minQty = cluster[0].qty;
@@ -246,7 +344,9 @@ export default function IndividualMonsterPage() {
                         gePrice: baseDrop.gePrice,
                         haPrice: baseDrop.haPrice,
                         isSummary: false,
-                        firstKc: Math.min(...cluster.map(d => d.firstKc))
+                        firstKc: Math.min(...cluster.map(d => d.firstKc)),
+                        signature,
+                        denominator
                     });
                 }
             });
@@ -256,38 +356,72 @@ export default function IndividualMonsterPage() {
             Object.keys(locMap).map(key => ({regionId: key, count: locMap[key]})).sort((a, b) => b.count - a.count)
         );
 
-        setAggregatedDrops(
-            finalDrops.sort((a, b) => {
-                const aBase = a.name.replace(' (Average)', '');
-                const bBase = b.name.replace(' (Average)', '');
-                if (aBase === bBase) {
-                    if (a.isSummary) return -1;
-                    if (b.isSummary) return 1;
+        // Group final drops by Signature, then by Category
+        const sigGroups: Record<string, Record<string, LocalAggregatedDrop[]>> = {};
+
+        finalDrops.forEach(drop => {
+            const sig = drop.signature;
+            if (!sigGroups[sig]) {
+                sigGroups[sig] = {};
+                CATEGORY_ORDER.forEach(cat => {
+                    sigGroups[sig][cat] = [];
+                });
+                sigGroups[sig]["Other Loot"] = [];
+            }
+
+            const cleanName = drop.name.replace(' (Average)', '');
+            const category = categorizeItem(cleanName, drop.count, drop.denominator, "Combat");
+
+            if (sigGroups[sig][category]) {
+                sigGroups[sig][category].push(drop);
+            } else {
+                sigGroups[sig]["Other Loot"].push(drop);
+            }
+        });
+
+        // Sort items inside each category
+        Object.values(sigGroups).forEach(categories => {
+            Object.values(categories).forEach(dropList => {
+                dropList.sort((a, b) => {
+                    const aBase = a.name.replace(' (Average)', '');
+                    const bBase = b.name.replace(' (Average)', '');
+                    if (aBase === bBase) {
+                        if (a.isSummary) return -1;
+                        if (b.isSummary) return 1;
+                        return b.count - a.count;
+                    }
                     return b.count - a.count;
-                }
-                return b.count - a.count;
-            })
-        );
+                });
+            });
+        });
+
+        const calculatedValue = finalDrops
+            .filter(drop => !drop.isSummary && drop.name !== "Nothing")
+            .reduce((acc, drop) => acc + ((isIronman ? drop.haPrice : drop.gePrice) * drop.totalQty), 0);
+
+        setTotalValue(calculatedValue);
+        setSignatureGroups(sigGroups);
+        setSignatureDenominators(sigDenominators);
     }
 
     useEffect(() => {
         async function fetchLogs() {
             setIsLoading(true);
 
-            // Fetch Drops
             const {data, error} = await supabase
                 .from('loot_logs')
                 .select('log_data')
                 .ilike('log_data->>source', targetName)
-                .or('log_data->>action.eq.NPC_DROP,log_data->>eventType.eq.NPC_DROP')
+                .eq('log_data->>category', 'Combat')
                 .order('id', {ascending: false})
-                .limit(5000);
+                .limit(10000);
 
             if (error) console.error("Database Error:", error);
-            if (data) processAnalytics(data);
+            if (data) {
+                processAnalytics(data as DatabaseRow[]);
+            }
 
-            // Fetch Monster Examine
-            const { data: examineData } = await supabase
+            const {data: examineData} = await supabase
                 .from('loot_logs')
                 .select('log_data')
                 .eq('log_data->>eventType', 'MONSTER_EXAMINE')
@@ -307,30 +441,37 @@ export default function IndividualMonsterPage() {
         }
     }, [targetName]);
 
-    const grouped: Record<string, AggregatedDrop[]> = {};
-    CATEGORY_ORDER.forEach(cat => {
-        grouped[cat] = [];
-    });
+    useEffect(() => {
+        // Recalculate total value when price mode changes
+        let newTotal = 0;
 
-    aggregatedDrops.forEach(drop => {
-        const cleanNameForCategory = drop.name.replace(' (Average)', '');
-        const category = categorizeItem(cleanNameForCategory, drop.count, totalKills, "Combat");
-        if (grouped[category]) grouped[category].push(drop);
-        else {
-            if (!grouped["Other Loot"]) grouped["Other Loot"] = [];
-            grouped["Other Loot"].push(drop);
-        }
-    });
+        Object.values(signatureGroups).forEach(categories => {
+            Object.values(categories).forEach(drops => {
+                drops.forEach(drop => {
+                    if (!drop.isSummary && drop.name !== "Nothing") {
+                        newTotal += (isIronman ? drop.haPrice : drop.gePrice) * drop.totalQty;
+                    }
+                });
+            });
+        });
+
+        setTotalValue(newTotal);
+    }, [isIronman, signatureGroups]);
+
+    const gpPerKill = totalKills > 0 ? Math.floor(totalValue / totalKills) : 0;
 
     return (
         <WikiLayout>
             <div className="w-full p-6 text-[14px] leading-relaxed">
-                <Link href="/monsters" className="text-[#729fcf] hover:underline mb-2 block">{'<'} Back to Bestiary</Link>
+                <Link href="/monsters" className="text-[#729fcf] hover:underline mb-2 block">{'<'} Back to
+                    Bestiary</Link>
 
                 <div className="flex gap-4 text-sm mt-2">
                     <h2>
-                        <span className="text-gray-400">Total Loot: <span className="text-[#fbdb71]">{totalValue.toLocaleString()} gp</span></span>
-                        <span className="text-gray-400 ml-4">Avg/Kill: <span className="text-[#fbdb71]">{gpPerKill.toLocaleString()} gp</span></span>
+                        <span className="text-gray-400">Total Loot: <span
+                            className="text-[#fbdb71]">{totalValue.toLocaleString()} gp</span></span>
+                        <span className="text-gray-400 ml-4">Avg/Kill: <span
+                            className="text-[#fbdb71]">{gpPerKill.toLocaleString()} gp</span></span>
                     </h2>
                 </div>
 
@@ -349,22 +490,81 @@ export default function IndividualMonsterPage() {
                 <div className="flex flex-col lg:flex-row gap-6 items-start">
                     <div className="flex-1 w-full order-2 lg:order-1">
                         <p className="mb-4">
-                            <strong className="text-white">{displayTitle}s</strong> are monsters found around Gielinor. The data below is generated dynamically based on <strong className="text-white">{totalKills}</strong> live data points recorded by your RuneLite plugin.
+                            <strong className="text-white">{displayTitle}s</strong> are monsters found around Gielinor.
+                            The data below is generated dynamically based on <strong
+                            className="text-white">{totalKills}</strong> live data points recorded by your RuneLite
+                            plugin.
                         </p>
+                        <div className="mb-6">
+                            <input
+                                value={searchItem}
+                                onChange={(e) => setSearchItem(e.target.value)}
+                                placeholder="Search item KC (e.g. Rune scimitar)"
+                                className="w-full px-3 py-2 bg-[#1e1e1e] border border-[#3a3a3a] text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#729fcf]"
+                            />
+                        </div>
+                        {searchItem && (
+                            <div
+                                className="mb-6 px-3 py-2 border border-[#3a3a3a] bg-[#222222] text-sm rounded-sm shadow-sm">
+                                {(() => {
+                                    let result = null;
+                                    let foundName = null;
 
+                                    for (const categories of Object.values(signatureGroups)) {
+                                        for (const drops of Object.values(categories)) {
+                                            for (const drop of drops) {
+                                                const cleanName = drop.name.replace(" (Average)", "").toLowerCase();
+                                                const query = searchItem.toLowerCase();
+
+                                                if (query.length >= 3 && cleanName.startsWith(query)) {
+                                                    result = drop.firstKc;
+                                                    foundName = drop.name.replace(" (Average)", "");
+                                                    break;
+                                                }
+                                            }
+                                            if (result) break;
+                                        }
+                                        if (result) break;
+                                    }
+
+                                    return result ? (
+                                        <span>
+                                            First{" "}
+                                            <span className="text-[#729fcf]">
+                                                {foundName}
+                                            </span> at{" "}
+                                            <span className="text-[#fbdb71]">
+                                                {result} KC
+                                            </span>
+                                        </span>
+                                    ) : (
+                                        <span className="text-gray-500 italic">Item not found.</span>
+                                    );
+                                })()}
+                            </div>
+                        )}
                         <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4 mt-8">Locations</h2>
                         <div className="overflow-x-auto mb-8">
-                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                            <table
+                                className="w-full table-fixed border-collapse border border-[#2f2f2f] text-sm bg-[#1f1f1f] rounded-md overflow-hidden">
                                 <thead>
                                 <tr className="bg-[#2a2a2a] text-white">
                                     <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Location</th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Region ID</th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Logged Kills</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Region ID
+                                    </th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Logged
+                                        Kills
+                                    </th>
                                 </tr>
                                 </thead>
                                 <tbody>
                                 {aggregatedLocations.length === 0 ? (
-                                    <tr><td colSpan={3} className="border border-[#3a3a3a] p-3 text-center text-gray-500 italic">No locations recorded.</td></tr>
+                                    <tr>
+                                        <td colSpan={3}
+                                            className="border border-[#3a3a3a] p-3 text-center text-gray-500 italic">No
+                                            locations recorded.
+                                        </td>
+                                    </tr>
                                 ) : aggregatedLocations.map((loc, idx) => (
                                     <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
                                         <td className="border border-[#3a3a3a] px-3 py-2 text-[#729fcf] text-left">{regionDictionary[loc.regionId] || `Unknown Area`}</td>
@@ -376,85 +576,153 @@ export default function IndividualMonsterPage() {
                             </table>
                         </div>
 
-                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4">Live Drop Tables</h2>
-                        <p className="mb-4 text-xs italic text-gray-400">Drop rates are calculated dynamically based on {totalKills} total records.</p>
-
                         {isLoading ? (
-                            <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">Crunching drop rates...</div>
-                        ) : aggregatedDrops.length === 0 ? (
-                            <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">No drops recorded.</div>
+                            <div
+                                className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">Crunching
+                                drop rates...</div>
+                        ) : Object.keys(signatureGroups).length === 0 ? (
+                            <div
+                                className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">No
+                                drops recorded.</div>
                         ) : (
-                            CATEGORY_ORDER.map(category => {
-                                const dropsInCategory = grouped[category];
-                                if (!dropsInCategory || dropsInCategory.length === 0) return null;
+
+                            Object.entries(signatureGroups)
+                                .sort((a, b) => {
+                                    const sigA = a[0];
+                                    const sigB = b[0];
+
+                                    const denomA = signatureDenominators[sigA] || 0;
+                                    const denomB = signatureDenominators[sigB] || 0;
+
+                                    // Handle Unknown last (optional but nice)
+                                    if (sigA === "Unknown") return 1;
+                                    if (sigB === "Unknown") return -1;
+
+                                    const isCombinedA = sigA.includes(",");
+                                    const isCombinedB = sigB.includes(",");
+
+                                    // Combined tables first
+                                    if (isCombinedA && !isCombinedB) return -1;
+                                    if (!isCombinedA && isCombinedB) return 1;
+
+                                    // Then sort by size (% of total indirectly)
+                                    return denomB - denomA;
+                                }).map(([sig, categories]) => {
+                                const denom = signatureDenominators[sig];
+                                const title = formatSignatureText(sig);
+
+                                // Only render the section if it actually has drops
+                                const hasDrops = Object.values(categories).some(list => list.length > 0);
+                                if (!hasDrops) return null;
+
                                 return (
-                                    <div key={category} className="mb-8">
-                                        <h3 className="text-[18px] font-serif text-[#ffffff] font-bold mb-2">{category}</h3>
-                                        <div className="overflow-x-auto">
-                                            <table className="w-full table-fixed border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
-                                                <thead>
-                                                <tr className="bg-[#2a2a2a] text-white">
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Quantity</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">Logged Drops</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Calculated Rarity</th>
-                                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold">Price ({isIronman ? 'HA' : 'GE'})</th>
-                                                </tr>
-                                                </thead>
-                                                <tbody>
-                                                {dropsInCategory.map((drop, idx) => {
-                                                    const rowBg = idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]";
-                                                    const rarityString = getRarity(drop.count, totalKills);
-                                                    let rarityColor = "bg-[#1e1e1e]";
-                                                    if (rarityString === "Always") rarityColor = "bg-[#80c8ff] text-black";
-                                                    else if (drop.count / totalKills > 0.05) rarityColor = "bg-[#90ff90] text-black";
-                                                    else if (drop.count / totalKills > 0.01) rarityColor = "bg-[#ffff90] text-black";
-                                                    else rarityColor = "bg-[#ffb050] text-black";
-                                                    const hasParentSummary = !drop.isSummary && dropsInCategory.some(d => d.name === `${drop.name} (Average)`);
-                                                    return (
-                                                        <tr key={idx} className={`${rowBg} hover:bg-[#333333] transition-colors ${drop.isSummary ? "border-t-2 border-[#cca052]/30" : ""}`}>
-                                                            <td className="border border-[#3a3a3a] px-3 py-2 text-left">
-                                                                <div className="flex items-center gap-2 justify-start">
-                                                                    {hasParentSummary && <span className="text-gray-600 text-xs ml-4">└</span>}
-                                                                    {drop.isSummary ? (
-                                                                        <span className="text-[#cca052] font-bold">{drop.name}</span>
-                                                                    ) : (
-                                                                        <Link href={`/items/${drop.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">{drop.name}</Link>
-                                                                    )}
-                                                                </div>
-                                                            </td>
-                                                            <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#ffffff]">{drop.displayQty}</td>
-                                                            <td className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">{drop.count}</td>
-                                                            <td className="border border-[#3a3a3a] p-0 text-center font-mono text-xs"><div className={`w-full h-full p-2 ${rarityColor}`}>{rarityString}</div></td>
-                                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right text-[#ffffff]">
-                                                                {drop.name === "Nothing" ? "N/A" : Math.floor((drop.totalQty / drop.count) * (isIronman ? drop.haPrice : drop.gePrice)).toLocaleString()}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                                </tbody>
-                                            </table>
-                                        </div>
+                                    <div
+                                        key={sig}
+                                        className="mb-12"
+                                    >
+                                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4 mt-10 flex justify-between items-end">
+                                            <span>{title}</span>
+                                            <span className="text-sm text-gray-400 font-sans">
+                                                {denom.toLocaleString()} kills • {((denom / totalKills) * 100).toFixed(1)}%
+                                            </span>
+                                        </h2>
+                                        {CATEGORY_ORDER.map(category => {
+                                            const dropsInCategory = categories[category];
+                                            if (!dropsInCategory || dropsInCategory.length === 0) return null;
+                                            return (
+                                                <div key={category}
+                                                     className="mb-8">
+                                                    <h3 className="text-[18px] font-serif text-[#ffffff] font-bold mb-2 ml-2">{category}</h3>
+                                                    <div className="overflow-x-auto">
+                                                        <table
+                                                            className="w-full table-fixed border-collapse border border-[#2f2f2f] text-sm bg-[#1f1f1f] rounded-md overflow-hidden">
+                                                            <thead>
+                                                            <tr className="bg-[#2a2a2a] text-white">
+                                                                <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
+                                                                <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Quantity</th>
+                                                                <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">Logged
+                                                                    Drops
+                                                                </th>
+                                                                <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Calculated
+                                                                    Rarity
+                                                                </th>
+                                                                <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold">Price
+                                                                    ({isIronman ? 'HA' : 'GE'})
+                                                                </th>
+                                                            </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                            {dropsInCategory.map((drop, idx) => {
+                                                                const rowBg = idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]";
+
+                                                                // Use the denominator specific to this table chunk!
+                                                                const rarityString = getRarity(drop.count, drop.denominator);
+                                                                let rarityColor = "bg-[#1e1e1e]";
+                                                                if (rarityString === "Always") rarityColor = "bg-[#80c8ff] text-black";
+                                                                else if (drop.count / drop.denominator > 0.05) rarityColor = "bg-[#90ff90] text-black";
+                                                                else if (drop.count / drop.denominator > 0.01) rarityColor = "bg-[#ffff90] text-black";
+                                                                else rarityColor = "bg-[#ffb050] text-black";
+
+                                                                const hasParentSummary = !drop.isSummary && dropsInCategory.some(d => d.name === `${drop.name} (Average)`);
+
+                                                                return (
+                                                                    <tr key={idx}
+                                                                        className={`${rowBg} hover:bg-[#333333] transition-colors ${drop.isSummary ? "border-t-2 border-[#cca052]/30" : ""}`}>
+                                                                        <td className="border border-[#3a3a3a] px-3 py-2 text-left">
+                                                                            <div
+                                                                                className="flex items-center gap-2 justify-start">
+                                                                                {hasParentSummary && <span
+                                                                                    className="text-gray-600 text-xs ml-4">└</span>}
+                                                                                {drop.isSummary ? (
+                                                                                    <span
+                                                                                        className="text-[#cca052] font-bold">{drop.name}</span>
+                                                                                ) : (
+                                                                                    <Link
+                                                                                        href={`/items/${drop.name.replace(/ /g, '_')}`}
+                                                                                        className="text-[#729fcf] hover:underline">{drop.name}</Link>
+                                                                                )}
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#ffffff]">{drop.displayQty}</td>
+                                                                        <td className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#cca052]">{drop.count}</td>
+                                                                        <td className="border border-[#3a3a3a] p-0 text-center font-mono text-xs">
+                                                                            <div
+                                                                                className={`w-full h-full p-2 ${rarityColor}`}>{rarityString}</div>
+                                                                        </td>
+                                                                        <td className="border border-[#3a3a3a] px-3 py-2 text-right text-[#ffffff]">
+                                                                            {drop.name === "Nothing" ? "N/A" : Math.floor((drop.totalQty / drop.count) * (isIronman ? drop.haPrice : drop.gePrice)).toLocaleString()}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 );
                             })
                         )}
                     </div>
 
-                    {/* RIGHT: THE WIKI INFOBOX (Updated with 2-column stats) */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
-                        <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
+                        <table
+                            className="w-full table-fixed border-collapse border border-[#2f2f2f] text-sm bg-[#1f1f1f] rounded-md overflow-hidden">
                             <tbody>
                             <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
+                                <th colSpan={4}
+                                    className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
                                     {displayTitle}
                                 </th>
                             </tr>
                             <tr>
                                 <td colSpan={4} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
-                                    <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
+                                    <div
+                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
                                         <img
-                                            src={`https://oldschool.runescape.wiki/images/${displayTitle.replace(/ /g, '_')}.png`}
+                                            src={dynamicImageUrl || `https://oldschool.runescape.wiki/images/${displayTitle.replace(/ /g, '_')}.png`}
                                             alt={displayTitle}
                                             className="max-w-[130px] max-h-[130px] object-contain drop-shadow-md"
                                             loading="lazy"
@@ -467,20 +735,24 @@ export default function IndividualMonsterPage() {
                                 </td>
                             </tr>
                             <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                <th colSpan={4}
+                                    className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Live Combat Stats
                                 </th>
                             </tr>
                             {!examineStats ? (
                                 <tr>
-                                    <td colSpan={4} className="p-3 bg-[#1e1e1e] text-center text-gray-500 italic border-b border-[#3a3a3a]">
+                                    <td colSpan={4}
+                                        className="p-3 bg-[#1e1e1e] text-center text-gray-500 italic border-b border-[#3a3a3a]">
                                         Cast Monster Inspect to populate.
                                     </td>
                                 </tr>
                             ) : (
                                 <>
                                     <tr className="bg-[#1e1e1e]">
-                                        <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs w-1/4">Cmb Lvl</th>
+                                        <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs w-1/4">Cmb
+                                            Lvl
+                                        </th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right font-bold text-white text-xs w-1/4">{examineStats.combat}</td>
                                         <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs w-1/4">HP</th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right font-bold text-[#ff6666] text-xs w-1/4">{examineStats.hp}</td>
@@ -500,11 +772,18 @@ export default function IndividualMonsterPage() {
                                     <tr className="bg-[#222222]">
                                         <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs">Ranged</th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right text-[#90ff90] text-xs">{examineStats.range}</td>
-                                        <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-[#ff6666] text-xs">Atk Speed</th>
+                                        <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-[#ff6666] text-xs">Atk
+                                            Speed
+                                        </th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right text-white text-xs">{examineStats.atkSpeed}</td>
                                     </tr>
 
-                                    <tr><th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold text-xs">Defensive Bonuses</th></tr>
+                                    <tr>
+                                        <th colSpan={4}
+                                            className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold text-xs">Defensive
+                                            Bonuses
+                                        </th>
+                                    </tr>
 
                                     <tr className="bg-[#1e1e1e]">
                                         <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs">Stab</th>
@@ -525,23 +804,36 @@ export default function IndividualMonsterPage() {
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right text-white text-xs">{examineStats.defHeavy}</td>
                                     </tr>
                                     <tr className="bg-[#222222]">
-                                        <th colSpan={3} className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-[#729fcf] text-xs">Magic Defense</th>
+                                        <th colSpan={3}
+                                            className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-[#729fcf] text-xs">Magic
+                                            Defence
+                                        </th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right text-white text-xs">{examineStats.defMage}</td>
                                     </tr>
                                 </>
                             )}
                             <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                <th colSpan={4}
+                                    className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Combat Overview
                                 </th>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Kill Count</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{totalKills.toLocaleString()}</td>
+                                <th colSpan={2}
+                                    className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Kill
+                                    Count
+                                </th>
+                                <td colSpan={2}
+                                    className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{totalKills.toLocaleString()}</td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total Wealth</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#cca052] font-bold">{Math.floor(totalValue).toLocaleString()} gp</td>
+                                <th colSpan={2}
+                                    className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total
+                                    Wealth
+                                </th>
+                                <td colSpan={2}
+                                    className="p-2 border border-[#3a3a3a] text-right text-[#cca052] font-bold">{Math.floor(totalValue).toLocaleString()} gp
+                                </td>
                             </tr>
                             </tbody>
                         </table>

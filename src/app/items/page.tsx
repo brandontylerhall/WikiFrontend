@@ -1,4 +1,5 @@
 "use client";
+
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
@@ -22,6 +23,10 @@ interface ProcessedItem {
     origins: Set<string>;
 }
 
+// --- OPTIMIZATION CONSTANTS ---
+const ALLOWED_ITEM_ACTIONS = new Set(['', 'GATHER_GAIN', 'NPC_DROP']);
+const IGNORED_SOURCES = new Set(["none", "pickup", "unknown/pickup", "bank", "unknown"]);
+
 export default function ItemsPage() {
     const [categories, setCategories] = useState<Record<string, ProcessedItem[]>>({});
     const [isIronman, setIsIronman] = useState(false);
@@ -40,50 +45,44 @@ export default function ItemsPage() {
                 const itemMap: Record<string, ProcessedItem> = {};
 
                 data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data as any; // Cast to bypass strict types for a moment
+                    const log = row.log_data;
+                    if (!log || !log.items) return;
 
-                    if (log.items) {
-                        const category = log.category || "Unknown";
-                        const source = log.source || "";
-                        const regionId = log.regionId;
+                    const category = log.category || "Unknown";
+                    const source = log.source || "";
+                    const regionId = log.regionId;
 
-                        // Grab whatever event key exists (new eventType or old action)
-                        const evt = (log.eventType || log.action || "").toUpperCase();
+                    const evt = (log.eventType || log.action || "").toUpperCase();
+                    const isAllowedAction = ALLOWED_ITEM_ACTIONS.has(evt);
 
-                        // Only allow actual gains (ignoring TAKE/PICKUP so we don't double count)
-                        const ALLOWED_ITEM_ACTIONS = ['', 'GATHER_GAIN', 'NPC_DROP'];
-                        const isAllowedAction = ALLOWED_ITEM_ACTIONS.includes(evt);
+                    log.items.forEach((item: LogItem) => {
+                        const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
 
-                        log.items.forEach((item: LogItem) => {
-                            const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
+                        if (!itemMap[name]) {
+                            itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0, origins: new Set()};
+                        }
 
-                            if (!itemMap[name]) {
-                                itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0, origins: new Set()};
-                            }
+                        const itemGE = item.GE || 0;
+                        const itemHA = item.HA || 0;
 
-                            const itemGE = item.GE || 0;
-                            const itemHA = item.HA || 0;
+                        if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
+                        if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
 
-                            if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
-                            if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
+                        if (isAllowedAction) {
+                            itemMap[name].qty += item.qty;
 
-                            // Only increment if it wasn't dropped, consumed, or picked up
-                            if (isAllowedAction) {
-                                itemMap[name].qty += item.qty;
-
-                                if (category === 'Combat' || evt === 'NPC_DROP') {
-                                    if (source && !["none", "pickup", "unknown/pickup", "bank", "unknown"].includes(source.toLowerCase())) {
-                                        itemMap[name].origins.add(source);
-                                    }
-                                } else {
-                                    if (regionId) {
-                                        const regionName = regionDictionary[String(regionId)];
-                                        itemMap[name].origins.add(regionName || `Region ${regionId}`);
-                                    }
+                            if (category === 'Combat' || evt === 'NPC_DROP') {
+                                if (source && !IGNORED_SOURCES.has(source.toLowerCase())) {
+                                    itemMap[name].origins.add(source);
+                                }
+                            } else {
+                                if (regionId) {
+                                    const regionName = regionDictionary[String(regionId)];
+                                    itemMap[name].origins.add(regionName || `Region ${regionId}`);
                                 }
                             }
-                        });
-                    }
+                        }
+                    });
                 });
 
                 const categorized: Record<string, ProcessedItem[]> = {};
@@ -130,12 +129,10 @@ export default function ItemsPage() {
     return (
         <WikiLayout>
             <div className="w-full p-6 text-[14px] leading-relaxed">
-
-                {/* Breadcrumb */}
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
-                    <span className="text-gray-300">Items</span>
+                    <span className="text-gray-300">Item Log</span>
                 </div>
 
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">
@@ -167,14 +164,11 @@ export default function ItemsPage() {
                                     <h2 className="text-xl font-serif text-white">{catName}</h2>
                                     <span className="text-[#cca052] text-sm">{catValue.toLocaleString()} gp</span>
                                 </div>
-                                <table
-                                    className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
+                                <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
                                     <thead>
                                     <tr className="bg-[#2a2a2a] text-white">
                                         <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Acquired
-                                            From
-                                        </th>
+                                        <th className="w-1/3 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Acquired From</th>
                                         <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty</th>
                                         <th className="w-1/6 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
                                     </tr>
@@ -189,16 +183,13 @@ export default function ItemsPage() {
                                             : 'Various';
 
                                         return (
-                                            <tr key={idx}
-                                                className="border border-[#3a3a3a] hover:bg-[#2a2a2a] transition-colors">
+                                            <tr key={idx} className="border border-[#3a3a3a] hover:bg-[#2a2a2a] transition-colors">
                                                 <td className="border border-[#3a3a3a] px-3 py-2">
-                                                    <Link href={`/items/${item.name.replace(/ /g, '_')}`}
-                                                          className="text-[#729fcf] hover:underline">
+                                                    <Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
                                                         {item.name}
                                                     </Link>
                                                 </td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-gray-400 text-xs truncate"
-                                                    title={originsArr.join(', ')}>
+                                                <td className="border border-[#3a3a3a] px-3 py-2 text-gray-400 text-xs truncate" title={originsArr.join(', ')}>
                                                     {displayOrigins}
                                                 </td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.qty.toLocaleString()}</td>

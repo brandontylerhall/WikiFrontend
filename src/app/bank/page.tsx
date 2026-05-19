@@ -4,7 +4,7 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import {LEGACY_ID_MAP} from '@/lib/constants';
-import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
+import {categorizeItem, CATEGORY_ORDER, getBankSubCategory, SUB_CATEGORY_ORDER, TOOL_HACK_REGEX, COMBAT_AXE_HACK_REGEX} from '@/lib/utils';
 import WikiLayout from "@/components/WikiLayout";
 import {DatabaseRow, LogItem} from '@/lib/types';
 
@@ -27,97 +27,6 @@ interface ProcessedItem {
     qty: number;
     unitGe: number;
     unitHa: number;
-}
-
-// Custom sort array to dictate exactly what order the sub-tables appear in
-const SUB_CATEGORY_ORDER = [
-    "Runes", "Ammunition",
-    "Melee Weapons", "Melee Armour",
-    "Ranged Weapons", "Ranged Armour",
-    "Magic Weapons", "Magic Armour",
-    "Capes", "Jewellery & Accessories",
-    "Mining & Smithing", "Woodcutting & Firemaking", "Crafting", "Fletching", "Runecrafting", "General Resources",
-    "Cooked Food", "Cooking Materials", "Potions", "Burnt Food"
-];
-
-// PRE-COMPILED REGEX OPTIMIZATION
-const AMMO_REGEX = /\b(arrows?|bolt|dart|javelin|knife|thrownaxe)\b/;
-const RAW_FOOD_REGEX = /\b(raw)\b/;
-const POTION_REGEX = /\b(potion|brew)\b/;
-const BURNT_FOOD_REGEX = /\b(burnt)\b/;
-const MINING_GEAR_REGEX = /\b(pickaxe)\b/;
-const WC_GEAR_REGEX = /\b(axe|hatchet|tinderbox|forestry)\b/;
-const FISHING_GEAR_REGEX = /\b(fishing rod|fishing net|harpoon|lobster pot)\b/;
-const CRAFTING_GEAR_REGEX = /\b(hammer|chisel|mould|mold|needle)\b/;
-const FARMING_GEAR_REGEX = /\b(spade|rake|dibber|secateurs|trowel)\b/;
-const HUNTER_GEAR_REGEX = /\b(box trap|snare|bird snare)\b/;
-const MINING_RES_REGEX = /\b(ore|coal|bar|clay|sandstone|granite|amethyst|salt)\b/;
-const WC_RES_REGEX = /\b(log|logs)\b/;
-const CRAFTING_RES_REGEX = /\b(hide|cowhide|leather|flax|seaweed|oyster|glass|molten|wool)\b/;
-const RC_RES_REGEX = /\b(essence|core)\b/;
-const FLETCH_RES_REGEX = /\b(feather|shaft|arrowtips?)\b/;
-const CAPE_REGEX = /\b(cape|cloak|accumulator|attractor)\b/;
-const MAGIC_WEAPON_ARMOUR_REGEX = /\b(staff|wand|mystic|robe|ahrim|infinity)\b/;
-const MAGIC_WEAPON_REGEX = /\b(staff|wand)\b/;
-const RANGED_WEAPON_ARMOUR_REGEX = /\b(\w*bow|studded|dart|knife|thrownaxe|chaps|vamb\w*|d'hide|dragonhide|karil|pegasian|coif)\b/;
-const RANGED_WEAPON_REGEX = /\b(\w*bow|dart|knife|thrownaxe)\b/;
-const MELEE_WEAPON_REGEX = /\b(\w*sword|scimitar|dagger|mace|spear|halberd|battleaxe|warhammer|whip|fang|rapier|defender)\b/;
-const MELEE_ARMOUR_REGEX = /\b(helm|helmet|platebody|platelegs|plateskirt|\w*shield|chainbody|boots|gloves|sq|kite)\b/;
-const JEWELLERY_REGEX = /\b(ring|amulet|necklace|bracelet)\b/;
-const TOOL_HACK_REGEX = /\b(axe|hatchet|pickaxe|tinderbox|harpoon|fishing rod|fishing net|hammer|chisel|spade)\b/;
-const COMBAT_AXE_HACK_REGEX = /\b(battleaxe|thrownaxe)\b/;
-
-function getBankSubCategory(name: string, mainCategory: string): string {
-    const lowerName = name.toLowerCase();
-
-    if (mainCategory === "Runes & Ammunition") {
-        if (AMMO_REGEX.test(lowerName)) return "Ammunition";
-        return "Runes";
-    }
-
-    if (mainCategory === "Food & Potions") {
-        if (RAW_FOOD_REGEX.test(lowerName)) return "Cooking Materials";
-        if (POTION_REGEX.test(lowerName)) return "Potions";
-        if (BURNT_FOOD_REGEX.test(lowerName)) return "Burnt Food";
-        return "Cooked Food";
-    }
-
-    if (mainCategory === "Skilling Equipment") {
-        if (MINING_GEAR_REGEX.test(lowerName)) return "Mining";
-        if (WC_GEAR_REGEX.test(lowerName)) return "Woodcutting & Firemaking";
-        if (FISHING_GEAR_REGEX.test(lowerName)) return "Fishing";
-        if (CRAFTING_GEAR_REGEX.test(lowerName)) return "Crafting & Smithing";
-        if (FARMING_GEAR_REGEX.test(lowerName)) return "Farming";
-        if (HUNTER_GEAR_REGEX.test(lowerName)) return "Hunter";
-        return "General Equipment";
-    }
-
-    if (mainCategory === "Raw Resources") {
-        if (MINING_RES_REGEX.test(lowerName)) return "Mining & Smithing";
-        if (WC_RES_REGEX.test(lowerName)) return "Woodcutting & Firemaking";
-        if (CRAFTING_RES_REGEX.test(lowerName)) return "Crafting";
-        if (RC_RES_REGEX.test(lowerName)) return "Runecrafting";
-        if (FLETCH_RES_REGEX.test(lowerName)) return "Fletching";
-        return "General Resources";
-    }
-
-    if (mainCategory === "Weapons & Armour") {
-        if (CAPE_REGEX.test(lowerName)) return "Capes";
-        if (MAGIC_WEAPON_ARMOUR_REGEX.test(lowerName)) {
-            if (MAGIC_WEAPON_REGEX.test(lowerName)) return "Magic Weapons";
-            return "Magic Armour";
-        }
-        if (RANGED_WEAPON_ARMOUR_REGEX.test(lowerName)) {
-            if (RANGED_WEAPON_REGEX.test(lowerName)) return "Ranged Weapons";
-            return "Ranged Armour";
-        }
-        if (MELEE_WEAPON_REGEX.test(lowerName)) return "Melee Weapons";
-        if (MELEE_ARMOUR_REGEX.test(lowerName)) return "Melee Armour";
-        if (JEWELLERY_REGEX.test(lowerName)) return "Jewellery & Accessories";
-        return "Armour";
-    }
-
-    return mainCategory;
 }
 
 export default function BankHub() {
@@ -189,7 +98,7 @@ export default function BankHub() {
                         let catName = categorizeItem(info.name);
                         const lowerName = info.name.toLowerCase();
 
-                        // HACK: Force all tools explicitly into Skilling Equipment so they can be sorted by skill
+                        // Force all tools explicitly into Skilling Equipment so they can be sorted by skill
                         if (TOOL_HACK_REGEX.test(lowerName) && !COMBAT_AXE_HACK_REGEX.test(lowerName)) {
                             catName = "Skilling Equipment";
                         }
@@ -220,7 +129,6 @@ export default function BankHub() {
         fetchBankItems();
     }, []);
 
-    // FIX: Exact wealth calculation to prevent floor drift
     let exactTotalWealth = 0;
     Object.values(categories).forEach(subCats => {
         Object.values(subCats).flat().forEach(item => {
@@ -283,11 +191,9 @@ export default function BankHub() {
                             <div key={catName} className="mb-10">
                                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-1 mb-4">
                                     <h2 className="text-[24px] font-serif text-white">{catName}</h2>
-                                    <span
-                                        className="text-[#cca052] font-bold text-lg">{catValue.toLocaleString()} gp</span>
+                                    <span className="text-[#cca052] font-bold text-lg">{catValue.toLocaleString()} gp</span>
                                 </div>
 
-                                {/* Custom Array Sort to dictate sub-table order */}
                                 {Object.keys(subCategories).sort((a, b) => {
                                     const indexA = SUB_CATEGORY_ORDER.indexOf(a);
                                     const indexB = SUB_CATEGORY_ORDER.indexOf(b);
@@ -297,7 +203,6 @@ export default function BankHub() {
                                     return indexA - indexB;
                                 }).map(subCatName => {
                                     const items = subCategories[subCatName];
-
                                     const showSubHeader = subCatName !== catName;
 
                                     return (
@@ -307,27 +212,21 @@ export default function BankHub() {
                                                     {subCatName}
                                                 </h3>
                                             )}
-                                            <table
-                                                className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
                                                 <thead>
                                                 <tr className="bg-[#2a2a2a] text-white">
                                                     <th className="w-1/2 border border-[#3a3a3a] px-3 py-2 text-left font-bold">Item</th>
-                                                    <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-center font-bold">In
-                                                        Bank
-                                                    </th>
+                                                    <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-center font-bold">In Bank</th>
                                                     <th className="w-1/4 border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Value</th>
                                                 </tr>
                                                 </thead>
                                                 <tbody>
-                                                {/* ALPHABETICAL SORT APPLIED HERE */}
                                                 {items.sort((a, b) => a.name.localeCompare(b.name)).map((item, idx) => {
                                                     const itemValue = Math.floor(item.qty * (isIronman ? item.unitHa : item.unitGe));
                                                     return (
-                                                        <tr key={idx}
-                                                            className="border border-[#3a3a3a] hover:bg-[#2a2a2a] transition-colors">
+                                                        <tr key={idx} className="border border-[#3a3a3a] hover:bg-[#2a2a2a] transition-colors">
                                                             <td className="border border-[#3a3a3a] px-3 py-2">
-                                                                <Link href={`/items/${item.name.replace(/ /g, '_')}`}
-                                                                      className="text-[#729fcf] hover:underline">
+                                                                <Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
                                                                     {item.name}
                                                                 </Link>
                                                             </td>

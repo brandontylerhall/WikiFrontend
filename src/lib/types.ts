@@ -4,22 +4,25 @@ export interface LogItem {
     qty: number;
     GE?: number;
     HA?: number;
+    basePrice?: number;
 }
 
 export interface DatabaseRow {
+    id?: number;
     log_data: {
+        eventType?: string;
         action?: string;
         source?: string;
+        target?: string;
         category?: string;
+        skill?: string;
+        xpGained?: number;
+        note?: string;
         sessionId?: string;
         regionId?: number | string;
-        items?: Array<{
-            id: number;
-            name?: string;
-            qty: number;
-            GE?: number;
-            HA?: number;
-        }>;
+        timestamp?: string;
+        items?: LogItem[];
+        npcLevel?: number;
     };
 }
 
@@ -30,7 +33,7 @@ export interface AggregatedDrop {
     count: number;
     gePrice: number;
     haPrice: number;
-    isSummary?: boolean; // Brings back the summary flag
+    isSummary?: boolean;
     firstKc?: number;
 }
 
