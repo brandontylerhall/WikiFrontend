@@ -26,7 +26,7 @@ export default function MonstersHub() {
     const [isLoading, setIsLoading] = useState(true);
     // NEW: Store our dynamically fetched Wiki Images
     const [wikiImages, setWikiImages] = useState<Record<string, string>>({});
-    const [sortMode, setSortMode] = useState<"alpha" | "kc" | "profit">("alpha");
+    const [sortMode, setSortMode] = useState<"alpha" | "kc">("alpha");
 
     useEffect(() => {
         async function fetchMonsters() {
@@ -98,12 +98,6 @@ export default function MonstersHub() {
         if (sortMode === "kc") {
             return kcB - kcA;
         }
-
-        if (sortMode === "profit") {
-            // Placeholder for now (since you don’t have gp yet)
-            return kcB - kcA;
-        }
-
         return 0;
     });
 
@@ -138,17 +132,6 @@ export default function MonstersHub() {
                             }`}
                         >
                             Kill Count
-                        </button>
-
-                        <button
-                            onClick={() => setSortMode("profit")}
-                            className={`text-xs px-3 py-1 border ${
-                                sortMode === "profit"
-                                    ? "bg-[#cca052] text-black border-[#cca052]"
-                                    : "bg-[#2a2a2a] border-[#3a3a3a] text-[#c8c8c8] hover:bg-[#3a3a3a]"
-                            }`}
-                        >
-                            Profit/Kill
                         </button>
                     </div>
                     <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">

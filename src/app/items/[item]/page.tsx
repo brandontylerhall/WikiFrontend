@@ -308,7 +308,7 @@ export default function IndividualItemPage() {
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div
-                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a]">
+                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center">
                                         {displayTitle === "Quest point" ? (
                                             <img
                                                 src="https://oldschool.runescape.wiki/images/Quest_point_icon.png"

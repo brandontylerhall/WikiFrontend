@@ -4,7 +4,7 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import {LEGACY_ID_MAP} from '@/lib/constants';
-import {categorizeItem, CATEGORY_ORDER, getBankSubCategory, SUB_CATEGORY_ORDER, TOOL_HACK_REGEX, COMBAT_AXE_HACK_REGEX} from '@/lib/utils';
+import {categorizeItem, CATEGORY_ORDER, getBankSubCategory, SUB_CATEGORY_ORDER} from '@/lib/utils';
 import WikiLayout from "@/components/WikiLayout";
 import {DatabaseRow, LogItem} from '@/lib/types';
 
@@ -48,6 +48,7 @@ export default function BankHub() {
 
                 data.forEach((row: DatabaseRow) => {
                     const log = row.log_data;
+                    if (!log) return;
 
                     if (log.items) {
                         log.items.forEach((item: LogItem) => {
@@ -70,14 +71,16 @@ export default function BankHub() {
                             if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
                             if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
 
-                            if (log.action === 'BANK_SNAPSHOT') {
+                            const action = (log.action || log.eventType || "").toUpperCase();
+
+                            if (action === 'BANK_SNAPSHOT') {
                                 if (!itemMap[name].foundSnapshot) {
                                     itemMap[name].snapshotBase = item.qty;
                                     itemMap[name].foundSnapshot = true;
                                 }
-                            } else if (log.action === 'BANK_DEPOSIT') {
+                            } else if (action === 'BANK_DEPOSIT') {
                                 if (!itemMap[name].foundSnapshot) itemMap[name].deposits += item.qty;
-                            } else if (log.action === 'BANK_WITHDRAWAL') {
+                            } else if (action === 'BANK_WITHDRAWAL') {
                                 if (!itemMap[name].foundSnapshot) itemMap[name].withdrawals += item.qty;
                             }
                         });
@@ -95,15 +98,11 @@ export default function BankHub() {
                     const finalQty = info.snapshotBase + info.deposits - info.withdrawals;
 
                     if (finalQty > 0) {
-                        let catName = categorizeItem(info.name);
-                        const lowerName = info.name.toLowerCase();
-
-                        // Force all tools explicitly into Skilling Equipment so they can be sorted by skill
-                        if (TOOL_HACK_REGEX.test(lowerName) && !COMBAT_AXE_HACK_REGEX.test(lowerName)) {
-                            catName = "Skilling Equipment";
-                        }
-
+                        const catName = categorizeItem(info.name);
                         const subCatName = getBankSubCategory(info.name, catName);
+
+                        // Ignore Bank Fillers!
+                        if (catName === "Hidden" || subCatName === "Hidden") return;
 
                         if (!categorized[catName]) {
                             categorized[catName] = {};
@@ -152,7 +151,7 @@ export default function BankHub() {
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                     <span className="mx-2 text-gray-500">{'>'}</span>
-                    <span className="text-gray-300">Bank Viewer</span>
+                    <span className="text-gray-300">Live Bank</span>
                 </div>
 
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">

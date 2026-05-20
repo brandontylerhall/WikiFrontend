@@ -4,6 +4,7 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
+import {DatabaseRow} from '@/lib/types';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -39,7 +40,7 @@ const SkillGrid = ({title, skills, skillStats}: {
                 return (
                     <Link
                         key={skillName}
-                        href={`/skilling/${urlFriendlyName}`}
+                        href={`/xp/${urlFriendlyName}`}
                         className={`border p-4 flex flex-col items-center justify-center transition-all group ${
                             actionCount > 0
                                 ? "bg-[#1e1e1e] border-[#3a3a3a] hover:bg-[#2a2a2a] hover:border-[#cca052]"
@@ -81,23 +82,21 @@ export default function SkillingHub() {
             if (data) {
                 const stats: Record<string, number> = {};
 
-                data.forEach(row => {
-                    const log = row.log_data as any;
+                data.forEach((row: DatabaseRow) => {
+                    const log = row.log_data;
+                    if (!log) return;
 
-                    let targetSkill = log?.skill;
-                    if (!targetSkill && log?.category === 'Skilling') {
-                        targetSkill = log?.source;
+                    let targetSkill = log.skill;
+                    if (!targetSkill && log.category === 'Skilling') {
+                        targetSkill = log.source;
                     }
 
-                    const evt = (log?.eventType || log?.action || "").toUpperCase();
-
-                    // Allow XP_GAIN again so Magic/Combat register!
+                    const evt = (log.eventType || log.action || "").toUpperCase();
                     const isValidAction = ['', 'GATHER_GAIN', 'SPELL_CAST', 'RANGED_FIRE', 'XP_GAIN'].includes(evt);
 
                     if (targetSkill && isValidAction) {
                         const cleanSkill = targetSkill.charAt(0).toUpperCase() + targetSkill.slice(1).toLowerCase();
 
-                        // NEW: Ensure we aren't accidentally assigning actions to "Highwayman"
                         if (ALL_SKILLS.includes(cleanSkill)) {
                             stats[cleanSkill] = (stats[cleanSkill] || 0) + 1;
                         }
@@ -120,15 +119,15 @@ export default function SkillingHub() {
                     <div className="mb-6 text-sm">
                         <Link href="/" className="text-[#729fcf] hover:underline">Home</Link>
                         <span className="mx-2 text-gray-500">{'>'}</span>
-                        <span className="text-gray-300">Skilling</span>
+                        <span className="text-gray-300">Experience</span>
                     </div>
 
                     <div className="border-b border-[#3a3a3a] pb-4 mb-8">
                         <h1 className="text-[32px] font-serif text-[#ffffff] font-normal tracking-wide">
-                            Skilling Directory
+                            Skill Progress
                         </h1>
                         <p className="text-gray-400 mt-2">
-                            Track your gathering yields, resource gains, and skilling activity.
+                            Track your gathering yields, resource gains, and overall activity.
                         </p>
                     </div>
 

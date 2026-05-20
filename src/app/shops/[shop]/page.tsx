@@ -6,6 +6,7 @@ import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
 import regionData from '@/data/regions.json';
+import {DatabaseRow, LogItem} from '@/lib/types';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -14,7 +15,6 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// OSRS Base stock rarely uses irregular numbers. This helps filter junk on the very first visit.
 const STANDARD_SHOP_QTYS = new Set([
     0, 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 75, 80, 100, 150, 200, 250, 300, 400, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000
 ]);
@@ -34,6 +34,30 @@ interface StockItem {
     isLikelyJunk: boolean;
     sortIndex: number;
 }
+
+// Strictly Typed snapshot merger
+function mergeSnapshotItems(itemsArray: (LogItem & { sortIndex?: number })[][]) {
+    const mergedMap = new Map<string, LogItem & { sortIndex?: number }>();
+    itemsArray.forEach(items => {
+        items.forEach((item, index) => {
+            const name = item.name || 'Unknown';
+            if (!mergedMap.has(name)) {
+                mergedMap.set(name, { ...item, sortIndex: index });
+            } else {
+                const existing = mergedMap.get(name)!;
+                if (item.qty > existing.qty) existing.qty = item.qty;
+                existing.sortIndex = Math.min(existing.sortIndex ?? index, index);
+            }
+        });
+    });
+    return Array.from(mergedMap.values());
+}
+
+const formatAvg = (currency: number, qty: number) => {
+    if (qty === 0) return 0;
+    const exactAvg = currency / qty;
+    return Number.isInteger(exactAvg) ? exactAvg.toString() : `~${Math.round(exactAvg)}`;
+};
 
 export default function IndividualShopPage() {
     const params = useParams();
@@ -68,13 +92,15 @@ export default function IndividualShopPage() {
                 return;
             }
 
-            const transactions: Record<string, { bought: any[], sold: any[], spent: any[], received: any[] }> = {};
-            const rawSnapshots: { ts: number, items: any[] }[] = [];
+            const transactions: Record<string, { bought: LogItem[], sold: LogItem[], spent: LogItem[], received: LogItem[] }> = {};
+            const rawSnapshots: { ts: number, items: LogItem[] }[] = [];
             let latestRegion = "Unknown Location";
 
-            data?.forEach(row => {
-                const log = row.log_data as any;
-                const ts = new Date(log.timestamp).getTime();
+            data?.forEach((row: DatabaseRow) => {
+                const log = row.log_data;
+                if (!log) return;
+
+                const ts = log.timestamp ? new Date(log.timestamp).getTime() : 0;
                 const action = (log.eventType || "").toUpperCase();
 
                 if (log.regionId) latestRegion = regionDictionary[String(log.regionId)] || `Region ${log.regionId}`;
@@ -87,19 +113,16 @@ export default function IndividualShopPage() {
 
                 if (!transactions[ts]) transactions[ts] = {bought: [], sold: [], spent: [], received: []};
 
-                // Legacy fallback parsing
                 if (action === 'SHOP_BUY') transactions[ts].bought.push(...(log.items || []));
                 if (action === 'SHOP_SELL') transactions[ts].sold.push(...(log.items || []));
                 if (action === 'SHOP_SPEND') transactions[ts].spent.push(...(log.items || []));
                 if (action === 'SHOP_RECEIVE') transactions[ts].received.push(...(log.items || []));
 
-                // NEW: Parse the modern SHOP_TRANSACTION format
                 if (action === 'SHOP_TRANSACTION') {
                     const gained = log.items || [];
                     let lostQty = 0;
                     let lostName = "Unknown";
 
-                    // Extract what was spent from the note string
                     if (log.note && log.note.includes("Spent:")) {
                         const match = log.note.match(/Spent:\s*(\d+)x\s*(.*)/);
                         if (match) {
@@ -108,83 +131,45 @@ export default function IndividualShopPage() {
                         }
                     }
 
-                    // Smart detection: If we gained Coins, it was a Sell action. Otherwise, a Buy action.
-                    const gainedCoins = gained.find((i: any) => i.name === "Coins");
+                    const isSelling = gained.some((i: LogItem) => i.name === "Coins");
 
-                    if (gainedCoins) {
+                    if (isSelling) {
                         transactions[ts].received.push(...gained);
-                        if (lostQty > 0) {
-                            transactions[ts].sold.push({name: lostName, qty: lostQty});
-                        }
+                        if (lostQty > 0) transactions[ts].sold.push({id: 0, name: lostName, qty: lostQty});
                     } else {
                         transactions[ts].bought.push(...gained);
-                        if (lostQty > 0) {
-                            transactions[ts].spent.push({name: lostName, qty: lostQty});
-                        }
+                        if (lostQty > 0) transactions[ts].spent.push({id: 0, name: lostName, qty: lostQty});
                     }
                 }
             });
 
-            // --- DATA SCIENCE: TIME-CLUSTERED SNAPSHOTS ---
             rawSnapshots.sort((a, b) => a.ts - b.ts);
-            const distinctVisits: any[][] = [];
-            let currentGroup: any[][] = [];
+            const distinctVisits: LogItem[][] = [];
+            let currentGroup: LogItem[][] = [];
             let groupStartTime = 0;
 
             rawSnapshots.forEach(snap => {
                 if (groupStartTime === 0 || snap.ts - groupStartTime > 1000 * 60 * 60 * 2) {
-                    if (currentGroup.length > 0) {
-                        const mergedMap = new Map<string, any>();
-                        currentGroup.forEach(items => {
-                            items.forEach((item, index) => {
-                                if (!mergedMap.has(item.name)) mergedMap.set(item.name, {...item, sortIndex: index});
-                                else {
-                                    if (item.qty > mergedMap.get(item.name).qty) mergedMap.get(item.name).qty = item.qty;
-                                    mergedMap.get(item.name).sortIndex = Math.min(mergedMap.get(item.name).sortIndex, index);
-                                }
-                            });
-                        });
-                        distinctVisits.push(Array.from(mergedMap.values()));
-                    }
+                    if (currentGroup.length > 0) distinctVisits.push(mergeSnapshotItems(currentGroup));
                     currentGroup = [snap.items];
                     groupStartTime = snap.ts;
                 } else {
                     currentGroup.push(snap.items);
                 }
             });
-            if (currentGroup.length > 0) {
-                const mergedMap = new Map<string, any>();
-                currentGroup.forEach(items => {
-                    items.forEach((item, index) => {
-                        if (!mergedMap.has(item.name)) mergedMap.set(item.name, {...item, sortIndex: index});
-                        else {
-                            if (item.qty > mergedMap.get(item.name).qty) mergedMap.get(item.name).qty = item.qty;
-                            mergedMap.get(item.name).sortIndex = Math.min(mergedMap.get(item.name).sortIndex, index);
-                        }
-                    });
-                });
-                distinctVisits.push(Array.from(mergedMap.values()));
-            }
+            if (currentGroup.length > 0) distinctVisits.push(mergeSnapshotItems(currentGroup));
 
             const totalVisits = distinctVisits.length;
-
-            const itemPresence: Record<string, {
-                presenceCount: number,
-                maxQty: number,
-                exactBasePrice: number,
-                sortIndex: number
-            }> = {};
+            const itemPresence: Record<string, { presenceCount: number, maxQty: number, exactBasePrice: number, sortIndex: number }> = {};
 
             distinctVisits.forEach(visitItems => {
-                visitItems.forEach((item: any, index: number) => {
-                    const itemName = item.name;
+                visitItems.forEach((item: LogItem & { sortIndex?: number }, index: number) => {
+                    const itemName = item.name || 'Unknown';
                     if (!itemPresence[itemName]) {
                         itemPresence[itemName] = {
                             presenceCount: 0,
                             maxQty: 0,
-                            exactBasePrice: item.basePrice
-                                ? (item.basePrice / item.qty)
-                                : Math.max(1, Math.round((item.HA / item.qty) / 0.6)),
+                            exactBasePrice: item.basePrice ? (item.basePrice / item.qty) : Math.max(1, Math.round(((item.HA || 0) / item.qty) / 0.6)),
                             sortIndex: item.sortIndex !== undefined ? item.sortIndex : index
                         };
                     } else {
@@ -201,26 +186,14 @@ export default function IndividualShopPage() {
             const capturedStock = Object.entries(itemPresence)
                 .map(([name, data]) => {
                     const presenceScore = Math.round((data.presenceCount / totalVisits) * 100);
-
                     let isLikelyJunk = false;
-                    if (totalVisits > 1 && presenceScore < 100) {
-                        isLikelyJunk = true;
-                    } else if (totalVisits === 1 && !STANDARD_SHOP_QTYS.has(data.maxQty)) {
-                        isLikelyJunk = true;
-                    }
+                    if (totalVisits > 1 && presenceScore < 100) isLikelyJunk = true;
+                    else if (totalVisits === 1 && !STANDARD_SHOP_QTYS.has(data.maxQty)) isLikelyJunk = true;
 
-                    return {
-                        name,
-                        qty: data.maxQty,
-                        storeBasePrice: data.exactBasePrice,
-                        presenceScore,
-                        isLikelyJunk,
-                        sortIndex: data.sortIndex
-                    };
+                    return { name, qty: data.maxQty, storeBasePrice: data.exactBasePrice, presenceScore, isLikelyJunk, sortIndex: data.sortIndex };
                 })
                 .sort((a, b) => a.sortIndex - b.sortIndex);
 
-            // --- PROCESS TRANSACTIONS ---
             const boughtMap = new Map<string, ShopItem>();
             const soldMap = new Map<string, ShopItem>();
             let spentTally = 0;
@@ -230,13 +203,10 @@ export default function IndividualShopPage() {
                 if (tx.bought.length > 0 && tx.spent.length > 0) {
                     const item = tx.bought[0];
                     const currency = tx.spent[0];
-                    if (!boughtMap.has(item.name)) boughtMap.set(item.name, {
-                        name: item.name,
-                        totalQty: 0,
-                        totalCurrency: 0,
-                        currencyName: currency.name
-                    });
-                    const stat = boughtMap.get(item.name)!;
+                    const itemName = item.name || "Unknown";
+                    if (!boughtMap.has(itemName)) boughtMap.set(itemName, { name: itemName, totalQty: 0, totalCurrency: 0, currencyName: currency.name || "Unknown" });
+
+                    const stat = boughtMap.get(itemName)!;
                     stat.totalQty += item.qty;
                     stat.totalCurrency += currency.qty;
                     spentTally += currency.qty;
@@ -244,13 +214,10 @@ export default function IndividualShopPage() {
                 if (tx.sold.length > 0 && tx.received.length > 0) {
                     const item = tx.sold[0];
                     const currency = tx.received[0];
-                    if (!soldMap.has(item.name)) soldMap.set(item.name, {
-                        name: item.name,
-                        totalQty: 0,
-                        totalCurrency: 0,
-                        currencyName: currency.name
-                    });
-                    const stat = soldMap.get(item.name)!;
+                    const itemName = item.name || "Unknown";
+                    if (!soldMap.has(itemName)) soldMap.set(itemName, { name: itemName, totalQty: 0, totalCurrency: 0, currencyName: currency.name || "Unknown" });
+
+                    const stat = soldMap.get(itemName)!;
                     stat.totalQty += item.qty;
                     stat.totalCurrency += currency.qty;
                     earnedTally += currency.qty;
@@ -303,6 +270,69 @@ export default function IndividualShopPage() {
                 <div className="flex flex-col lg:flex-row gap-8 items-start">
                     <div className="flex-1 w-full order-2 lg:order-1">
 
+                        {/* REARRANGED: Purchases and Sales rendered BEFORE Inventory Stock */}
+
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Your Purchases</h2>
+                        <div className="overflow-x-auto mb-10">
+                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
+                                <thead>
+                                <tr className="bg-[#2a2a2a] text-white">
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/3">Item</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty Bought</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#80c8ff]">Avg Paid (ea)</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#ff6666]">Total Cost</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {isLoading ? (
+                                    <tr><td colSpan={4} className="p-4 text-center text-gray-500 italic">Scanning ledgers...</td></tr>
+                                ) : boughtItems.length === 0 ? (
+                                    <tr><td colSpan={4} className="p-4 text-center text-gray-500 italic">You haven't bought anything here.</td></tr>
+                                ) : (
+                                    boughtItems.map((item, idx) => (
+                                        <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
+                                            <td className="border border-[#3a3a3a] px-3 py-2"><Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">{item.name}</Link></td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{formatAvg(item.totalCurrency, item.totalQty)}</td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">-{item.totalCurrency.toLocaleString()}</td>
+                                        </tr>
+                                    ))
+                                )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Items Liquidated</h2>
+                        <div className="overflow-x-auto mb-10">
+                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
+                                <thead>
+                                <tr className="bg-[#2a2a2a] text-white">
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/3">Item</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty Sold</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#80c8ff]">Avg Received (ea)</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#90ff90]">Total Revenue</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                {isLoading ? (
+                                    <tr><td colSpan={4} className="p-4 text-center text-gray-500 italic">Scanning ledgers...</td></tr>
+                                ) : soldItems.length === 0 ? (
+                                    <tr><td colSpan={4} className="p-4 text-center text-gray-500 italic">You haven't sold anything here.</td></tr>
+                                ) : (
+                                    soldItems.map((item, idx) => (
+                                        <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
+                                            <td className="border border-[#3a3a3a] px-3 py-2"><Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">{item.name}</Link></td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{formatAvg(item.totalCurrency, item.totalQty)}</td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">+{item.totalCurrency.toLocaleString()}</td>
+                                        </tr>
+                                    ))
+                                )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Inventory moved to bottom */}
                         <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-2 mb-4">
                             <h2 className="text-[22px] font-serif text-[#ffffff]">Observed Base Stock</h2>
                             <div className="flex gap-2">
@@ -319,209 +349,71 @@ export default function IndividualShopPage() {
                             <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
                                 <thead>
                                 <tr className="bg-[#2a2a2a] text-white">
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Item in
-                                        Stock
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Base
-                                        Quantity
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Store
-                                        Base Price
-                                    </th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Item in Stock</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Base Quantity</th>
+                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#cca052]">Store Base Price</th>
                                 </tr>
                                 </thead>
                                 <tbody>
                                 {isLoading ? (
-                                    <tr>
-                                        <td colSpan={3} className="p-4 text-center text-gray-500 italic">Reading shop
-                                            interface...
-                                        </td>
-                                    </tr>
+                                    <tr><td colSpan={3} className="p-4 text-center text-gray-500 italic">Reading shop interface...</td></tr>
                                 ) : displayedStock.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={3} className="p-4 text-center text-gray-500 italic">No inventory
-                                            snapshot found for this shop. Open it in-game!
-                                        </td>
-                                    </tr>
+                                    <tr><td colSpan={3} className="p-4 text-center text-gray-500 italic">No inventory snapshot found for this shop. Open it in-game!</td></tr>
                                 ) : (
-                                    displayedStock.map((item, idx) => {
-                                        return (
-                                            <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
-                                                <td className="border border-[#3a3a3a] px-3 py-2">
-                                                    <div className="flex items-center gap-2">
-                                                        <Link href={`/items/${item.name.replace(/ /g, '_')}`}
-                                                              className="text-[#729fcf] hover:underline">
-                                                            {item.name}
-                                                        </Link>
-                                                        {item.isLikelyJunk && (
-                                                            <span
-                                                                className="text-[10px] text-[#ff6666] ml-2 border border-[#ff6666]/30 px-1 rounded bg-[#ff6666]/10"
-                                                                title="This is likely an item sold by another player.">
-                                                                Player Sold
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white font-bold">{item.qty === 0 ? "Out of Stock" : item.qty.toLocaleString()}</td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-gray-400">{item.storeBasePrice.toLocaleString()} gp</td>
-                                            </tr>
-                                        );
-                                    })
-                                )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Your
-                            Purchases</h2>
-                        <div className="overflow-x-auto mb-10">
-                            <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e]">
-                                <thead>
-                                <tr className="bg-[#2a2a2a] text-white">
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/3">Item</th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty Bought
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#80c8ff]">Avg
-                                        Paid (ea)
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#ff6666]">Total
-                                        Cost
-                                    </th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {isLoading ? (
-                                    <tr>
-                                        <td colSpan={4} className="p-4 text-center text-gray-500 italic">Scanning
-                                            ledgers...
-                                        </td>
-                                    </tr>
-                                ) : boughtItems.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={4} className="p-4 text-center text-gray-500 italic">You haven't
-                                            bought anything here.
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    boughtItems.map((item, idx) => {
-                                        const exactAvg = item.totalCurrency / item.totalQty;
-                                        const avgDisplay = Number.isInteger(exactAvg) ? exactAvg : `~${Math.round(exactAvg)}`;
-
-                                        return (
-                                            <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
-                                                <td className="border border-[#3a3a3a] px-3 py-2"><Link
-                                                    href={`/items/${item.name.replace(/ /g, '_')}`}
-                                                    className="text-[#729fcf] hover:underline">{item.name}</Link></td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
-
-                                                {/* Remove the hardcoded ~ from this <td> */}
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{avgDisplay}</td>
-
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">-{item.totalCurrency.toLocaleString()}</td>
-                                            </tr>
-                                        );
-                                    })
-                                )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Items
-                            Liquidated</h2>
-                        <div className="overflow-x-auto mb-8">
-                            <table
-                                className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
-                                <thead>
-                                <tr className="bg-[#2a2a2a] text-white">
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/3">Item</th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold">Qty Sold
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#80c8ff]">Avg
-                                        Received (ea)
-                                    </th>
-                                    <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#90ff90]">Total
-                                        Revenue
-                                    </th>
-                                </tr>
-                                </thead>
-                                <tbody>
-                                {isLoading ? (
-                                    <tr>
-                                        <td colSpan={4} className="p-4 text-center text-gray-500 italic">Scanning
-                                            ledgers...
-                                        </td>
-                                    </tr>
-                                ) : soldItems.length === 0 ? (
-                                    <tr>
-                                        <td colSpan={4} className="p-4 text-center text-gray-500 italic">You haven't
-                                            sold anything here.
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    soldItems.map((item, idx) => {
-                                        const exactAvg = item.totalCurrency / item.totalQty;
-                                        const avgDisplay = Number.isInteger(exactAvg) ? exactAvg : `~${Math.round(exactAvg)}`;
-
-                                        return (
-                                            <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
-                                                <td className="border border-[#3a3a3a] px-3 py-2"><Link
-                                                    href={`/items/${item.name.replace(/ /g, '_')}`}
-                                                    className="text-[#729fcf] hover:underline">{item.name}</Link></td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white">{item.totalQty.toLocaleString()}</td>
-
-                                                {/* Remove the hardcoded ~ from this <td> */}
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-[#80c8ff]">{avgDisplay}</td>
-
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-right text-gray-300">+{item.totalCurrency.toLocaleString()}</td>
-                                            </tr>
-                                        );
-                                    })
+                                    displayedStock.map((item, idx) => (
+                                        <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
+                                            <td className="border border-[#3a3a3a] px-3 py-2">
+                                                <div className="flex items-center gap-2">
+                                                    <Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline">
+                                                        {item.name}
+                                                    </Link>
+                                                    {item.isLikelyJunk && (
+                                                        <span className="text-[10px] text-[#ff6666] ml-2 border border-[#ff6666]/30 px-1 rounded bg-[#ff6666]/10" title="This is likely an item sold by another player.">
+                                                            Player Sold
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-center text-white font-bold">{item.qty === 0 ? "Out of Stock" : item.qty.toLocaleString()}</td>
+                                            <td className="border border-[#3a3a3a] px-3 py-2 text-right font-mono text-gray-400">{item.storeBasePrice.toLocaleString()} gp</td>
+                                        </tr>
+                                    ))
                                 )}
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    {/* WIKI INFOBOX */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
                             <tbody>
                             <tr>
-                                <th colSpan={2}
-                                    className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
+                                <th colSpan={2} className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
                                     {shopName}
                                 </th>
                             </tr>
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
-                                    <div
-                                        className="w-[150px] h-[150px] mx-auto flex items-center justify-center text-gray-500 italic border border-[#3a3a3a]">
+                                    <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center text-gray-500 italic border border-[#3a3a3a]">
                                         [Shop Interface]
                                     </div>
                                 </td>
                             </tr>
                             <tr>
-                                <th colSpan={2}
-                                    className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
+                                <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Merchant Ledger
                                 </th>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Total
-                                    Transactions
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Total Transactions</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{(boughtItems.length + soldItems.length).toLocaleString()}</td>
                             </tr>
                             <tr className="bg-[#222222]">
-                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total
-                                    Spent
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total Spent</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#ff6666] font-bold">-{totalSpent.toLocaleString()}</td>
                             </tr>
                             <tr className="bg-[#1e1e1e]">
-                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total
-                                    Earned
-                                </th>
+                                <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Total Earned</th>
                                 <td className="p-2 border border-[#3a3a3a] text-right text-[#90ff90] font-bold">+{totalEarned.toLocaleString()}</td>
                             </tr>
                             </tbody>

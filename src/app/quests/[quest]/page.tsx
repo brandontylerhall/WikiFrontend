@@ -22,6 +22,21 @@ interface WikiMetadata {
     series: string;
 }
 
+// HELPER: Extracted to remove massive math redundancies
+function formatDuration(totalSeconds: number) {
+    const d = Math.floor(totalSeconds / 86400);
+    const h = Math.floor((totalSeconds % 86400) / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+
+    const parts = [];
+    if (d > 0) parts.push(`${d}d`);
+    if (h > 0) parts.push(`${h}h`);
+    if (m > 0) parts.push(`${m}m`);
+    if (s > 0 || parts.length === 0) parts.push(`${s}s`);
+    return parts.join(' ');
+}
+
 export default function IndividualQuestPage() {
     const params = useParams();
     const rawQuest = typeof params?.quest === 'string' ? params.quest : '';
@@ -36,14 +51,12 @@ export default function IndividualQuestPage() {
     const [xpRewards, setXpRewards] = useState<QuestReward[]>([]);
     const [itemRewards, setItemRewards] = useState<{name: string, qty: number}[]>([]);
 
-    // NEW: State to hold the live Wiki data
     const [wikiData, setWikiData] = useState<WikiMetadata>({ difficulty: '-', length: '-', series: '-' });
 
     useEffect(() => {
         async function fetchQuestDetails() {
             setIsLoading(true);
 
-            // 1. Fetch your personal Supabase analytics
             const {data: questLogs, error: qError} = await supabase
                 .from('loot_logs')
                 .select('log_data')
@@ -52,7 +65,7 @@ export default function IndividualQuestPage() {
 
             if (qError) {
                 console.error(qError);
-            } else {
+            } else if (questLogs) {
                 let start: Date | null = null;
                 let end: Date | null = null;
                 let trackedSeconds: number | null = null;
@@ -60,35 +73,28 @@ export default function IndividualQuestPage() {
                 const xpMap: Record<string, number> = {};
                 const itemMap: Record<string, number> = {};
 
-                if (questLogs) {
-                    for (const row of questLogs) {
-                        const log = row.log_data as any;
+                for (const row of questLogs) {
+                    const log = row.log_data as any;
 
-                        if (log.eventType === 'QUEST_PROGRESS') {
-                            if (log.target === "IN_PROGRESS" && !start) {
-                                start = new Date(log.timestamp);
-                            }
-                            if (log.target === "FINISHED") {
-                                end = new Date(log.timestamp);
-
-                                if (log.note && log.note.startsWith("In-Game Ticks: ")) {
-                                    const ticks = parseInt(log.note.replace("In-Game Ticks: ", ""));
-                                    if (!isNaN(ticks) && ticks > 0) {
-                                        trackedSeconds = Math.floor(ticks * 0.6);
-                                    }
-                                }
+                    if (log.eventType === 'QUEST_PROGRESS') {
+                        if (log.target === "IN_PROGRESS" && !start) start = new Date(log.timestamp);
+                        if (log.target === "FINISHED") {
+                            end = new Date(log.timestamp);
+                            if (log.note?.startsWith("In-Game Ticks: ")) {
+                                const ticks = parseInt(log.note.replace("In-Game Ticks: ", ""));
+                                if (!isNaN(ticks) && ticks > 0) trackedSeconds = Math.floor(ticks * 0.6);
                             }
                         }
+                    }
 
-                        if (log.eventType === 'XP_GAIN') {
-                            xpMap[log.skill] = (xpMap[log.skill] || 0) + log.xpGained;
-                        }
+                    if (log.eventType === 'XP_GAIN') {
+                        xpMap[log.skill] = (xpMap[log.skill] || 0) + log.xpGained;
+                    }
 
-                        if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
-                            log.items.forEach((item: any) => {
-                                itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-                            });
-                        }
+                    if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
+                        log.items.forEach((item: any) => {
+                            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
+                        });
                     }
                 }
 
@@ -103,36 +109,18 @@ export default function IndividualQuestPage() {
                 setItemRewards(Object.entries(itemMap).map(([name, qty]) => ({ name, qty })));
             }
 
-            // 2. NEW: Fetch live metadata via WikiText Parsing
             try {
-                // MediaWiki APIs prefer underscores instead of spaces for page titles
                 const safeQuestName = encodeURIComponent(questName.replace(/ /g, '_'));
-
-                // action=parse is the universally supported MediaWiki endpoint
                 const wikiUrl = `https://oldschool.runescape.wiki/api.php?action=parse&page=${safeQuestName}&prop=wikitext&format=json&origin=*`;
-
                 const res = await fetch(wikiUrl);
                 const data = await res.json();
-
-                // Navigate the JSON to grab the raw wiki code
                 const wikitext = data?.parse?.wikitext?.['*'];
 
                 if (wikitext) {
-                    // Create a mini-parser to grab exact values out of the {{Infobox Quest}}
                     const extractProp = (propName: string) => {
-                        // Looks for "| difficulty = Novice"
-                        const regex = new RegExp(`\\|\\s*${propName}\\s*=\\s*(.+)`, 'i');
-                        const match = wikitext.match(regex);
-
+                        const match = wikitext.match(new RegExp(`\\|\\s*${propName}\\s*=\\s*(.+)`, 'i'));
                         if (!match) return propName === 'series' ? 'None' : 'Unknown';
-
-                        let val = match[1].trim();
-
-                        // 1. Remove hidden HTML comments like val = val.replace(//g, '').trim();
-                        // 2. Strip out Wiki links [[Target|Display Text]] so it just says "Display Text"
-                        val = val.replace(/\[\[(?:[^\]|]+\|)?([^\]]+)\]\]/g, '$1');
-
-                        return val || (propName === 'series' ? 'None' : 'Unknown');
+                        return match[1].trim().replace(/\[\[(?:[^\]|]+\|)?([^\]]+)\]\]/g, '$1') || (propName === 'series' ? 'None' : 'Unknown');
                     };
 
                     setWikiData({
@@ -151,40 +139,14 @@ export default function IndividualQuestPage() {
         if (questName) fetchQuestDetails();
     }, [questName]);
 
-    // Format Calendar Duration
     let calendarDuration = "-";
     if (startTime && finishTime) {
-        const diffSeconds = Math.floor((finishTime.getTime() - startTime.getTime()) / 1000);
-        const days = Math.floor(diffSeconds / 86400);
-        const hours = Math.floor((diffSeconds % 86400) / 3600);
-        const minutes = Math.floor((diffSeconds % 3600) / 60);
-        const seconds = diffSeconds % 60;
-
-        const parts = [];
-        if (days > 0) parts.push(`${days}d`);
-        if (hours > 0) parts.push(`${hours}h`);
-        if (minutes > 0) parts.push(`${minutes}m`);
-        if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
-
-        calendarDuration = parts.join(' ');
+        calendarDuration = formatDuration(Math.floor((finishTime.getTime() - startTime.getTime()) / 1000));
     } else if (!startTime && status === "FINISHED") {
         calendarDuration = "Pre-Plugin";
     }
 
-    // Format In-Game Duration
-    let inGameDuration = "Untracked";
-    if (inGameSeconds !== null) {
-        const hours = Math.floor(inGameSeconds / 3600);
-        const mins = Math.floor((inGameSeconds % 3600) / 60);
-        const secs = inGameSeconds % 60;
-
-        const parts = [];
-        if (hours > 0) parts.push(`${hours}h`);
-        if (mins > 0) parts.push(`${mins}m`);
-        if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
-
-        inGameDuration = parts.join(' ');
-    }
+    const inGameDuration = inGameSeconds !== null ? formatDuration(inGameSeconds) : "Untracked";
 
     const questPointsItem = itemRewards.find(i => i.name === "Quest point");
     const standardItems = itemRewards.filter(i => i.name !== "Quest point");
@@ -292,7 +254,6 @@ export default function IndividualQuestPage() {
                         </div>
                     </div>
 
-                    {/* WIKI SIDEBAR */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
                             <tbody>
@@ -301,8 +262,6 @@ export default function IndividualQuestPage() {
                                     {questName}
                                 </th>
                             </tr>
-
-                            {/* UPDATED: Your much better image tag logic */}
                             <tr>
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div className="mx-auto flex items-center justify-center border border-[#3a3a3a] bg-[#1a1a1a] overflow-hidden p-2">
@@ -317,8 +276,6 @@ export default function IndividualQuestPage() {
                                     </div>
                                 </td>
                             </tr>
-
-                            {/* SECTION: Live Wiki Quest Information */}
                             <tr>
                                 <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Quest Information
@@ -339,41 +296,26 @@ export default function IndividualQuestPage() {
                             {wikiData.series !== 'None' && (
                                 <tr className="bg-[#1e1e1e]">
                                     <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Series</th>
-                                    {/* Changed to standard white text, no link styling */}
                                     <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">
                                         {wikiData.series}
                                     </td>
                                 </tr>
                             )}
-
-                            {/* SECTION: Your Custom Analytics */}
                             <tr>
                                 <th colSpan={2} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
                                     Analytics
                                 </th>
                             </tr>
-                            {startTime && finishTime && (
-                                <>
-                                    <tr className="bg-[#1e1e1e]">
-                                        <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Started</th>
-                                        <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime.toLocaleString()}</td>
-                                    </tr>
-                                    <tr className="bg-[#222222]">
-                                        <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Finished</th>
-                                        <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{finishTime.toLocaleString()}</td>
-                                    </tr>
-                                </>
-                            )}
-                            {startTime && !finishTime && (
+                            {startTime && (
                                 <tr className="bg-[#1e1e1e]">
                                     <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Started</th>
                                     <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime.toLocaleString()}</td>
                                 </tr>
                             )}
-                            {!startTime && finishTime && (
-                                <tr className="bg-[#1e1e1e]">
-                                    <th className="p-2 border border-[#3a3a3a] text-left w-2/5 font-normal text-[#c8c8c8]">Completion Synced</th>
-                                    <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{finishTime.toLocaleDateString()}</td>
+                            {finishTime && (
+                                <tr className="bg-[#222222]">
+                                    <th className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">{startTime ? "Finished" : "Completion Synced"}</th>
+                                    <td className="p-2 border border-[#3a3a3a] text-right text-[#ffffff]">{startTime ? finishTime.toLocaleString() : finishTime.toLocaleDateString()}</td>
                                 </tr>
                             )}
                             {!startTime && !finishTime && status === "FINISHED" && (

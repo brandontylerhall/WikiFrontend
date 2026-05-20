@@ -15,8 +15,6 @@ export default function QuestsHub() {
     const [questStates, setQuestStates] = useState<Record<string, string>>({});
     const [totalQP, setTotalQP] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-
-    // NEW: State for our error popup
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     useEffect(() => {
@@ -29,20 +27,21 @@ export default function QuestsHub() {
                 .eq('log_data->>category', 'Quests')
                 .order('id', {ascending: true});
 
-            if (error) console.error(error);
+            if (error) {
+                console.error(error);
+                setIsLoading(false);
+                return;
+            }
 
             if (data) {
                 const states: Record<string, string> = {};
-                const qpMap = new Map<string, number>(); // Map prevents double-counting!
-
-                // Create a strict lookup set of real quest names
+                const qpMap = new Map<string, number>();
                 const validQuestNames = new Set(questList.map((q: any) => q.name));
 
                 data.forEach(row => {
                     const log = row.log_data as any;
                     const source = log.source;
 
-                    // 1. Completely ignore ghost NPCs and legacy bugged logs
                     if (!source || !validQuestNames.has(source)) return;
 
                     if (log.eventType === 'QUEST_PROGRESS' && log.target) {
@@ -52,7 +51,6 @@ export default function QuestsHub() {
                     if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
                         log.items.forEach((item: any) => {
                             if (item.name === "Quest point") {
-                                // 2. Map ensures a quest can only grant points ONCE
                                 qpMap.set(source, item.qty);
                                 states[source] = "FINISHED";
                             }
@@ -61,10 +59,7 @@ export default function QuestsHub() {
                 });
 
                 setQuestStates(states);
-
-                // Sum up the sanitized, deduplicated points
-                const calculatedQP = Array.from(qpMap.values()).reduce((a, b) => a + b, 0);
-                setTotalQP(calculatedQP);
+                setTotalQP(Array.from(qpMap.values()).reduce((a, b) => a + b, 0));
             }
             setIsLoading(false);
         }
@@ -73,29 +68,21 @@ export default function QuestsHub() {
     }, []);
 
     const f2pQuests = questList.filter(q => q.type === "F2P");
-    const p2pQuests = questList.filter(q => q.type === "P2P");
 
     const getQuestColor = (state: string) => {
         if (state === "FINISHED") return "text-[#90ff90]";
         if (state === "IN_PROGRESS") return "text-[#ffff90]";
-        return "text-[#ff6666]"; // NOT_STARTED
+        return "text-[#ff6666]";
     };
 
-    // NEW: Function to trigger the error toast
     const handleLockedQuestClick = (questName: string) => {
         setErrorMessage(`You have not encountered "${questName}" yet. Embark on the adventure in-game first!`);
-
-        // Auto-hide the message after 3 seconds
-        setTimeout(() => {
-            setErrorMessage(null);
-        }, 3000);
+        setTimeout(() => setErrorMessage(null), 3000);
     };
 
     return (
         <WikiLayout>
             <div className="w-full p-6 text-[14px] leading-relaxed relative">
-
-                {/* NEW: The Error Toast Notification */}
                 {errorMessage && (
                     <div className="fixed bottom-10 right-10 bg-[#222222] border-l-4 border-[#ff6666] text-white p-4 shadow-2xl z-50 animate-fade-in font-serif">
                         <span className="font-bold text-[#ff6666] mr-2">Locked:</span>
@@ -133,14 +120,12 @@ export default function QuestsHub() {
                     <div className="text-center p-12 text-gray-500 italic bg-[#1e1e1e] border border-[#3a3a3a]">Loading quest data...</div>
                 ) : (
                     <div className="flex flex-col lg:flex-row gap-8">
-                        {/* F2P QUESTS */}
                         <div className="flex-1">
                             <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Free-to-Play Quests</h2>
                             <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex flex-col gap-2 font-bold font-serif text-[16px]">
                                 {f2pQuests.map(q => {
                                     const state = questStates[q.name] || "NOT_STARTED";
 
-                                    // NEW: Conditional Rendering based on state
                                     if (state === "NOT_STARTED") {
                                         return (
                                             <button
@@ -153,7 +138,6 @@ export default function QuestsHub() {
                                         );
                                     }
 
-                                    // Render normal link for IN_PROGRESS or FINISHED
                                     return (
                                         <Link key={q.name} href={`/quests/${q.name.replace(/ /g, '_')}`} className={`${getQuestColor(state)} hover:underline drop-shadow-md`}>
                                             {q.name}
@@ -163,7 +147,6 @@ export default function QuestsHub() {
                             </div>
                         </div>
 
-                        {/* P2P QUESTS (Placeholder for now) */}
                         <div className="flex-1 opacity-50">
                             <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Members' Quests</h2>
                             <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center text-gray-500 italic">

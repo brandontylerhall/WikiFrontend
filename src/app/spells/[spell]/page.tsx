@@ -5,6 +5,7 @@ import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
+import {DatabaseRow, LogItem} from '@/lib/types';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -28,7 +29,10 @@ const SPELL_REQUIREMENTS: Record<string, Record<string, number>> = {
     "Varrock Teleport": { "Law rune": 1, "Fire rune": 1, "Air rune": 3 },
     "Falador Teleport": { "Law rune": 1, "Water rune": 1, "Air rune": 3 },
     "Camelot Teleport": { "Law rune": 1, "Air rune": 5 },
-    "High Level Alchemy": { "Nature rune": 1, "Fire rune": 5 }
+    "High Level Alchemy": { "Nature rune": 1, "Fire rune": 5 },
+    "Low Level Alchemy": { "Nature rune": 1, "Fire rune": 3 },
+    "Monster Examine": { "Astral rune": 1, "Cosmic rune": 1, "Mind rune": 1 },
+    "Monster Inspect": { "Astral rune": 1, "Cosmic rune": 1, "Mind rune": 1 }
 };
 
 interface RunePricing {
@@ -37,6 +41,72 @@ interface RunePricing {
     ha: number;
 }
 
+// ============================================================================
+// CUSTOM MODULE: MONSTER EXAMINE / INSPECT
+// ============================================================================
+function MonsterExamineModule() {
+    const [monsters, setMonsters] = useState<Record<string, number>>({});
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        async function fetchExamines() {
+            const {data} = await supabase
+                .from('loot_logs')
+                .select('log_data->>source')
+                .or('log_data->>eventType.eq.MONSTER_EXAMINE,log_data->>action.eq.MONSTER_EXAMINE')
+                .limit(5000);
+
+            if (data) {
+                const map: Record<string, number> = {};
+                data.forEach((row: any) => {
+                    const src = row.source;
+                    if (src) map[src] = (map[src] || 0) + 1;
+                });
+                setMonsters(map);
+            }
+            setIsLoading(false);
+        }
+        fetchExamines();
+    }, []);
+
+    return (
+        <div className="mt-8 border-t border-[#3a3a3a] pt-8">
+            <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Inspected Bestiary</h2>
+            {isLoading ? (
+                <div className="p-8 text-center text-gray-500 italic bg-[#1e1e1e] border border-[#3a3a3a]">Flipping through pages...</div>
+            ) : Object.keys(monsters).length === 0 ? (
+                <div className="p-8 text-center text-gray-500 italic bg-[#1e1e1e] border border-[#3a3a3a]">No monsters examined yet.</div>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    {Object.entries(monsters).sort((a,b) => b[1] - a[1]).map(([monsterName, count]) => (
+                        <Link key={monsterName} href={`/monsters/${monsterName.replace(/ /g, '_')}`} className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex justify-between items-center hover:bg-[#2a2a2a] hover:border-[#cca052] transition-colors group">
+                            <span className="font-bold text-[#729fcf] group-hover:text-[#cca052] truncate">{monsterName}</span>
+                            <span className="text-xs font-mono text-gray-400 px-2 py-1 bg-black rounded">Casts: {count}</span>
+                        </Link>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ============================================================================
+// CUSTOM MODULE: ALCHEMY
+// ============================================================================
+function AlchemyModule({ spellName }: { spellName: string }) {
+    return (
+        <div className="mt-8 border-t border-[#3a3a3a] pt-8">
+            <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Lifetime Earnings</h2>
+            <div className="p-8 text-center text-gray-500 italic bg-[#1e1e1e] border border-[#3a3a3a]">
+                Alchemy data pipeline loaded. Awaiting exact JSON log format to calculate item liquidation profits.
+            </div>
+        </div>
+    );
+}
+
+// ============================================================================
+// MAIN PAGE: UNIFIED SPELL TEMPLATE (Export Default ensures layout renders!)
+// ============================================================================
 export default function IndividualSpellPage() {
     const params = useParams();
     const rawSpell = typeof params?.spell === 'string' ? params.spell : '';
@@ -44,7 +114,6 @@ export default function IndividualSpellPage() {
 
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
-
     const [totalCasts, setTotalCasts] = useState(0);
     const [totalXp, setTotalXp] = useState(0);
     const [actualRunesUsed, setActualRunesUsed] = useState<Record<string, number>>({});
@@ -68,27 +137,33 @@ export default function IndividualSpellPage() {
             }
 
             let xp = 0;
-            // FIX: Track the Game Tick (number) instead of the raw nanosecond timestamp
             const uniqueCasts = new Set<number>();
             const runes: Record<string, number> = {};
             const prices: Record<string, RunePricing> = {};
-
             const magicXpEvents: { time: number, spell: string }[] = [];
-            data?.forEach(row => {
-                const log = row.log_data as any;
+
+            data?.forEach((row: DatabaseRow) => {
+                const log = row.log_data;
+                if (!log) return;
+
                 if (log.eventType === 'XP_GAIN' && log.skill === 'Magic') {
                     let rawSource = log.source;
                     if (rawSource && rawSource !== 'Unknown' && rawSource !== 'Activity') {
                         if (rawSource.includes("->")) rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                        magicXpEvents.push({ time: new Date(log.timestamp).getTime(), spell: rawSource });
+                        if (log.timestamp) {
+                            magicXpEvents.push({ time: new Date(log.timestamp).getTime(), spell: rawSource });
+                        }
                     }
                 }
             });
 
-            data?.forEach(row => {
-                const log = row.log_data as any;
+            data?.forEach((row: DatabaseRow) => {
+                const log = row.log_data;
+                if (!log) return;
+
                 const action = (log.eventType || log.action || "").toUpperCase();
-                const tickId = Math.floor(new Date(log.timestamp).getTime() / 600);
+                const logTime = log.timestamp ? new Date(log.timestamp).getTime() : 0;
+                const tickId = Math.floor(logTime / 600);
 
                 if (action === "XP_GAIN" && log.skill === "Magic") {
                     let rawSource = log.source;
@@ -101,30 +176,28 @@ export default function IndividualSpellPage() {
                     }
                 }
 
-                if (action === "SPELL_CAST") {
+                if (action === "SPELL_CAST" || action === "MONSTER_EXAMINE") {
                     let rawSource = log.source || "Generic Magic";
-                    const logTime = new Date(log.timestamp).getTime();
                     const matchingXpEvent = magicXpEvents.find(e => Math.abs(e.time - logTime) < 600);
 
-                    if (matchingXpEvent) {
+                    if (action === "MONSTER_EXAMINE") {
+                        rawSource = "Monster Examine";
+                    } else if (matchingXpEvent) {
                         rawSource = matchingXpEvent.spell;
                     } else if (rawSource.includes("->")) {
                         rawSource = rawSource.split("->").pop()?.trim() || rawSource;
                     }
 
-                    if (rawSource === spellName) {
+                    if (rawSource === spellName || (spellName === "Monster Inspect" && rawSource === "Monster Examine")) {
                         uniqueCasts.add(tickId);
 
-                        log.items?.forEach((item: any) => {
+                        log.items?.forEach((item: LogItem) => {
                             const name = item.name;
                             if (!name) return;
 
                             runes[name] = (runes[name] || 0) + item.qty;
 
-                            if (!prices[name]) {
-                                prices[name] = { name, ge: 0, ha: 0 };
-                            }
-
+                            if (!prices[name]) prices[name] = { name, ge: 0, ha: 0 };
                             if (item.GE && prices[name].ge === 0) prices[name].ge = item.GE / item.qty;
                             if (item.HA && prices[name].ha === 0) prices[name].ha = item.HA / item.qty;
                         });
@@ -151,12 +224,11 @@ export default function IndividualSpellPage() {
         }, 0);
     };
 
-    const baseReqs = SPELL_REQUIREMENTS[spellName];
+    const baseReqs = SPELL_REQUIREMENTS[spellName] || SPELL_REQUIREMENTS[spellName.replace("Inspect", "Examine")];
     const theoreticalSetups = [];
 
     if (baseReqs) {
         theoreticalSetups.push({ label: "Base Rune Cost", reqs: { ...baseReqs } });
-
         ["Air rune", "Water rune", "Earth rune", "Fire rune"].forEach(eleRune => {
             if (baseReqs[eleRune]) {
                 const staffSetup = { ...baseReqs };
@@ -172,8 +244,7 @@ export default function IndividualSpellPage() {
             <div className="w-full p-6 text-[14px] leading-relaxed">
                 <div className="mb-6 text-sm">
                     <Link href="/" className="text-[#729fcf] hover:underline">Home</Link> ›
-                    <Link href="/skilling" className="text-[#729fcf] hover:underline">Skilling Hub</Link> ›
-                    <Link href="/skilling/Magic" className="text-[#729fcf] hover:underline">Magic</Link> ›
+                    <Link href="/spells" className="text-[#729fcf] hover:underline">Spellbook</Link> ›
                     <span className="text-gray-300"> {spellName}</span>
                 </div>
 
@@ -184,7 +255,6 @@ export default function IndividualSpellPage() {
                             {totalCasts.toLocaleString()} Casts Logged
                         </p>
                     </div>
-
                     <div className="text-right">
                         <div className="text-sm text-gray-400">Total Magic XP</div>
                         <div className="text-4xl font-bold text-[#fbdb71]">
@@ -195,7 +265,6 @@ export default function IndividualSpellPage() {
 
                 <div className="flex flex-col lg:flex-row gap-8 items-start">
                     <div className="flex-1 w-full order-2 lg:order-1">
-
                         <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-2 mb-4">
                             <h2 className="text-[22px] font-serif text-[#ffffff]">Theoretical Cost Analysis</h2>
                             <button onClick={() => setIsIronman(!isIronman)} className="text-xs px-2 py-1 bg-[#2a2a2a] border border-[#3a3a3a] text-[#c8c8c8] hover:bg-[#3a3a3a] transition-colors">
@@ -274,6 +343,11 @@ export default function IndividualSpellPage() {
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* --- CUSTOM MODULE INJECTIONS --- */}
+                        {(spellName === "Monster Examine" || spellName === "Monster Inspect") && <MonsterExamineModule />}
+                        {spellName.includes("Alchemy") && <AlchemyModule spellName={spellName} />}
+
                     </div>
 
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
@@ -289,7 +363,7 @@ export default function IndividualSpellPage() {
                                 <td colSpan={2} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
                                         <img
-                                            src={`https://oldschool.runescape.wiki/images/${spellName.replace(/ /g, '_')}.png`}
+                                            src={`https://oldschool.runescape.wiki/images/${spellName.replace(/ /g, '_').replace("Inspect", "Examine")}.png`}
                                             alt={spellName}
                                             className="w-16 h-16 object-contain drop-shadow-md"
                                             style={{imageRendering: 'pixelated'}}
