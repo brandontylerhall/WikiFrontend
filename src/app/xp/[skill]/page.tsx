@@ -163,16 +163,26 @@ export default function IndividualSkillPage() {
                                     <tr><td colSpan={3} className="p-4 text-center text-gray-500 italic">No sustainable {skillName} activities logged yet.</td></tr>
                                 ) : (
                                     actionStats.map((stat, idx) => {
-                                        const linkTarget = skillName === "Magic"
-                                            ? `/xp/Magic/${stat.name.replace(/ /g, '_')}`
-                                            : `/items/${stat.name.replace(/ /g, '_')}`;
+                                        let linkTarget = `/items/${stat.name.replace(/ /g, '_')}`;
+
+                                        if (skillName === "Magic") {
+                                            linkTarget = `/spells/${stat.name.replace(/ /g, '_')}`;
+                                        } else if (["Attack", "Strength", "Defence", "Hitpoints", "Ranged", "Slayer", "Thieving", "Hunter"].includes(skillName)) {
+                                            linkTarget = `/monsters/${stat.name.replace(/ /g, '_')}`;
+                                        }
+
+                                        const isGenericActivity = stat.name === "Activity" || stat.name === "Unknown";
 
                                         return (
                                             <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222]"}>
                                                 <td className="border border-[#3a3a3a] px-3 py-2">
-                                                    <Link href={linkTarget} className="text-[#729fcf] hover:underline">
-                                                        {stat.name}
-                                                    </Link>
+                                                    {isGenericActivity ? (
+                                                        <span className="text-gray-400">{stat.name}</span>
+                                                    ) : (
+                                                        <Link href={linkTarget} className="text-[#729fcf] hover:underline">
+                                                            {stat.name}
+                                                        </Link>
+                                                    )}
                                                 </td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#80c8ff]">{stat.actionCount.toLocaleString()}</td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#90ff90]">+{stat.totalXp.toLocaleString()}</td>
@@ -184,7 +194,7 @@ export default function IndividualSkillPage() {
                             </table>
                         </div>
 
-                        {/* NEW: Quests Experience Table */}
+                        {/* Quests Experience Table */}
                         {questStats.length > 0 && (
                             <>
                                 <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Quest Experience Rewards</h2>
@@ -193,7 +203,6 @@ export default function IndividualSkillPage() {
                                         <thead>
                                         <tr className="bg-[#2a2a2a] text-white">
                                             <th className="border border-[#3a3a3a] px-3 py-2 text-left font-bold w-1/2">Quest Name</th>
-                                            <th className="border border-[#3a3a3a] px-3 py-2 text-center font-bold text-[#80c8ff]">Reward Occurrences</th>
                                             <th className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#b080ff]">XP Gained</th>
                                         </tr>
                                         </thead>
@@ -209,7 +218,6 @@ export default function IndividualSkillPage() {
                                                         </Link>
                                                     )}
                                                 </td>
-                                                <td className="border border-[#3a3a3a] px-3 py-2 text-center text-[#80c8ff]">{stat.actionCount.toLocaleString()}</td>
                                                 <td className="border border-[#3a3a3a] px-3 py-2 text-right font-bold text-[#b080ff]">+{stat.totalXp.toLocaleString()}</td>
                                             </tr>
                                         ))}

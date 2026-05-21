@@ -23,15 +23,14 @@ interface RangedSupplyStat {
     name: string;
     qtyFired: number;
     qtyRetrieved: number;
-    qtySaved: number;
     unitGe: number;
     unitHa: number;
 }
 
 const CONSUME_ACTIONS = new Set(['CONSUME', 'COMBAT_CONSUME', 'SKILLING_CONSUME']);
 const MAGIC_ACTIONS = new Set(['SPELL_CAST', 'TELEPORT']);
-const POTION_KEYWORDS = ['potion', 'brew', 'restore', 'stamina', 'antifire', 'serum'];
-const AMMO_KEYWORDS = ['arrow', 'bolt', 'dart', 'knife'];
+const POTION_KEYWORDS = ['potion', 'brew', 'restore', 'stamina', 'antifire', 'serum', 'elixir'];
+const AMMO_KEYWORDS = ['arrow', 'bolt', 'dart', 'knife', 'javelin', 'chinchompa'];
 
 const calculateCost = (supplies: SupplyStat[], isIronman: boolean) => {
     return supplies.reduce((total, item) => total + (item.qtyUsed * (isIronman ? item.unitHa : item.unitGe)), 0);
@@ -39,12 +38,11 @@ const calculateCost = (supplies: SupplyStat[], isIronman: boolean) => {
 
 const calculateRangedCost = (supplies: RangedSupplyStat[], isIronman: boolean) => {
     return supplies.reduce((total, item) => {
-        const netLost = Math.max(0, item.qtyFired - item.qtyRetrieved - item.qtySaved);
+        const netLost = Math.max(0, item.qtyFired - item.qtyRetrieved);
         return total + (netLost * (isIronman ? item.unitHa : item.unitGe));
     }, 0);
 };
 
-// Your exact decimal evaluation rule
 const formatDecimal = (num: number): string => {
     if (Number.isInteger(num)) return num.toString();
     const str = num.toString();
@@ -98,8 +96,8 @@ const SupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLoadin
     );
 };
 
-const ConsumableTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLoading}: {
-    title: string, supplies: ConsumableStat[], colorClass: string, emptyMsg: string, isIronman: boolean, isLoading: boolean
+const ConsumableTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLoading, showHp}: {
+    title: string, supplies: ConsumableStat[], colorClass: string, emptyMsg: string, isIronman: boolean, isLoading: boolean, showHp: boolean
 }) => {
     const sectionCost = calculateCost(supplies, isIronman);
     return (
@@ -116,32 +114,30 @@ const ConsumableTable = ({title, supplies, colorClass, emptyMsg, isIronman, isLo
                     <thead>
                     <tr className="bg-[#2a2a2a] text-white">
                         <th className="border border-[#3a3a3a] px-2 py-2 text-left font-bold w-1/3">Item</th>
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold">Qty Eaten</th>
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#90ff90]">Total HP Healed</th>
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold">Avg HP/Eat</th>
+                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold">Qty {showHp ? 'Eaten' : 'Used'}</th>
+                        {showHp && <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#90ff90]">Total HP Healed</th>}
+                        {showHp && <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold">Avg HP/Eat</th>}
                         <th className="border border-[#3a3a3a] px-2 py-2 text-right font-bold text-[#ff6666]">Total Cost</th>
                     </tr>
                     </thead>
                     <tbody>
                     {isLoading ? (
-                        <tr><td colSpan={5} className="p-4 text-center text-gray-500 italic">Scanning logs...</td></tr>
+                        <tr><td colSpan={showHp ? 5 : 3} className="p-4 text-center text-gray-500 italic">Scanning logs...</td></tr>
                     ) : supplies.length === 0 ? (
-                        <tr><td colSpan={5} className="p-4 text-center text-gray-500 italic">{emptyMsg}</td></tr>
+                        <tr><td colSpan={showHp ? 5 : 3} className="p-4 text-center text-gray-500 italic">{emptyMsg}</td></tr>
                     ) : (
                         supplies.map((item, idx) => {
-                            // FIX: Resolved variable assignment loop error
                             let displayAvgHp = "0";
-                            if (item.qtyUsed > 0) {
-                                displayAvgHp = formatDecimal(item.hpHealed / item.qtyUsed);
-                            }
+                            if (item.qtyUsed > 0) displayAvgHp = formatDecimal(item.hpHealed / item.qtyUsed);
+
                             return (
                                 <tr key={idx} className={idx % 2 === 0 ? "bg-[#1e1e1e]" : "bg-[#222222] hover:bg-[#333333] transition-colors"}>
                                     <td className="border border-[#3a3a3a] px-2 py-2 truncate">
                                         <Link href={`/items/${item.name.replace(/ /g, '_')}`} className="text-[#729fcf] hover:underline" title={item.name}>{item.name}</Link>
                                     </td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-white">{item.qtyUsed.toLocaleString()}</td>
-                                    <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#90ff90] font-bold">{item.hpHealed.toLocaleString()}</td>
-                                    <td className="border border-[#3a3a3a] px-2 py-2 text-center text-gray-400">{displayAvgHp}</td>
+                                    {showHp && <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#90ff90] font-bold">{item.hpHealed.toLocaleString()}</td>}
+                                    {showHp && <td className="border border-[#3a3a3a] px-2 py-2 text-center text-gray-400">{displayAvgHp}</td>}
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-right text-gray-300">-{Math.floor(item.qtyUsed * (isIronman ? item.unitHa : item.unitGe)).toLocaleString()}</td>
                                 </tr>
                             );
@@ -173,22 +169,21 @@ const RangedSupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, is
                 <table className="w-full border-collapse border border-[#3a3a3a] text-sm bg-[#1e1e1e] table-fixed">
                     <thead>
                     <tr className="bg-[#2a2a2a] text-white">
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-left font-bold w-1/4">Ammunition</th>
+                        <th className="border border-[#3a3a3a] px-2 py-2 text-left font-bold w-1/3">Ammunition</th>
                         <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold">Qty Fired</th>
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#729fcf]">Qty Retrieved</th>
-                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#cca052]">Qty Saved</th>
+                        <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#80c8ff]">Qty Retrieved</th>
                         <th className="border border-[#3a3a3a] px-2 py-2 text-center font-bold text-[#ff6666]">Net Lost</th>
                         <th className="border border-[#3a3a3a] px-2 py-2 text-right font-bold text-[#ff6666]">Total Cost</th>
                     </tr>
                     </thead>
                     <tbody>
                     {isLoading ? (
-                        <tr><td colSpan={6} className="p-4 text-center text-gray-500 italic">Scanning logs...</td></tr>
+                        <tr><td colSpan={5} className="p-4 text-center text-gray-500 italic">Scanning logs...</td></tr>
                     ) : supplies.length === 0 ? (
-                        <tr><td colSpan={6} className="p-4 text-center text-gray-500 italic">{emptyMsg}</td></tr>
+                        <tr><td colSpan={5} className="p-4 text-center text-gray-500 italic">{emptyMsg}</td></tr>
                     ) : (
                         supplies.map((item, idx) => {
-                            const netLost = Math.max(0, item.qtyFired - item.qtyRetrieved - item.qtySaved);
+                            const netLost = Math.max(0, item.qtyFired - item.qtyRetrieved);
                             const totalCost = Math.floor(netLost * (isIronman ? item.unitHa : item.unitGe));
 
                             return (
@@ -198,7 +193,6 @@ const RangedSupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, is
                                     </td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-white">{item.qtyFired.toLocaleString()}</td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#80c8ff]">{item.qtyRetrieved.toLocaleString()}</td>
-                                    <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#cca052]">{item.qtySaved.toLocaleString()}</td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-center text-[#ff6666] font-bold">{netLost.toLocaleString()}</td>
                                     <td className="border border-[#3a3a3a] px-2 py-2 text-right text-gray-300">-{totalCost.toLocaleString()}</td>
                                 </tr>
@@ -218,7 +212,7 @@ export default function CombatHub() {
 
     const [magicSupplies, setMagicSupplies] = useState<SupplyStat[]>([]);
     const [rangedSupplies, setRangedSupplies] = useState<RangedSupplyStat[]>([]);
-    const [foodSupplies, setFoodSupplies] = useState<ConsumableStat[]>([]);
+    const [foodSupplies, setConsumableSupplies] = useState<ConsumableStat[]>([]);
     const [potionSupplies, setPotionSupplies] = useState<ConsumableStat[]>([]);
 
     useEffect(() => {
@@ -268,20 +262,15 @@ export default function CombatHub() {
                             if (targetMap[name].unitHa === 0) targetMap[name].unitHa = (item.HA || 0) / item.qty;
                         }
                         else if (action === 'RANGED_FIRE') {
-                            if (!rangedMap[name]) rangedMap[name] = {
-                                name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0
-                            };
+                            if (!rangedMap[name]) rangedMap[name] = { name, qtyFired: 0, qtyRetrieved: 0, unitGe: 0, unitHa: 0 };
                             rangedMap[name].qtyFired += item.qty;
                             if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
                             if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
                         }
                         else if (isTakeOrGround) {
                             const isAmmo = AMMO_KEYWORDS.some(a => lowerName.includes(a));
-
                             if (isAmmo) {
-                                if (!rangedMap[name]) rangedMap[name] = {
-                                    name, qtyFired: 0, qtyRetrieved: 0, qtySaved: 0, unitGe: 0, unitHa: 0
-                                };
+                                if (!rangedMap[name]) rangedMap[name] = { name, qtyFired: 0, qtyRetrieved: 0, unitGe: 0, unitHa: 0 };
                                 rangedMap[name].qtyRetrieved += item.qty;
                                 if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
                                 if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
@@ -292,7 +281,7 @@ export default function CombatHub() {
 
                 setMagicSupplies(Object.values(magicMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
                 setRangedSupplies(Object.values(rangedMap).sort((a, b) => b.qtyFired - a.qtyFired));
-                setFoodSupplies(Object.values(foodMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
+                setConsumableSupplies(Object.values(foodMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
                 setPotionSupplies(Object.values(potionMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
             }
             setIsLoading(false);
@@ -333,11 +322,11 @@ export default function CombatHub() {
                                    emptyMsg="No ammo used." isIronman={isIronman} isLoading={isLoading}/>
 
                 <ConsumableTable title="Food" supplies={foodSupplies} colorClass="text-[#cca052]"
-                                 emptyMsg="No food eaten." isIronman={isIronman} isLoading={isLoading}/>
+                                 emptyMsg="No food eaten." isIronman={isIronman} isLoading={isLoading} showHp={true}/>
 
                 {potionSupplies.length > 0 && (
                     <ConsumableTable title="Potions" supplies={potionSupplies} colorClass="text-[#cca052]"
-                                     emptyMsg="No potions used." isIronman={isIronman} isLoading={isLoading}/>
+                                     emptyMsg="No potions used." isIronman={isIronman} isLoading={isLoading} showHp={false}/>
                 )}
             </div>
         </WikiLayout>
