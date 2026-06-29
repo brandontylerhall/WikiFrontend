@@ -122,32 +122,40 @@ export default function HomePage() {
             <div className="w-full max-w-4xl mb-16">
                 <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
                     {/* ROW 1: The Core Loop (Most Important) */}
-                    <Link href="/monsters" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/monsters"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Bestiary</span>
                     </Link>
-                    <Link href="/xp" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/xp"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Skill Progress</span>
                     </Link>
-                    <Link href="/items" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/items"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Item Log</span>
                     </Link>
 
                     {/* ROW 2: Utility & Resource Drain (Wider tiles) */}
-                    <Link href="/combat" className="md:col-span-3 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/combat"
+                          className="md:col-span-3 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Combat Costs</span>
                     </Link>
-                    <Link href="/xp/Magic" className="md:col-span-3 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/xp/Magic"
+                          className="md:col-span-3 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Magic Spells</span>
                     </Link>
 
                     {/* ROW 3: Economy & Meta Tracking */}
-                    <Link href="/quests" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/quests"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Quest Journal</span>
                     </Link>
-                    <Link href="/shops" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/shops"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Merchants & Shops</span>
                     </Link>
-                    <Link href="/bank" className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
+                    <Link href="/bank"
+                          className="md:col-span-2 h-32 bg-[#1e1e1e] border border-[#3a3a3a] flex items-center justify-center text-2xl font-serif hover:border-[#cca052] transition-all group">
                         <span className="group-hover:text-[#cca052]">Live Bank</span>
                     </Link>
                 </div>
@@ -173,8 +181,10 @@ export default function HomePage() {
                             const displayTitle = source.name.charAt(0).toUpperCase() + source.name.slice(1);
 
                             return (
-                                <Link key={idx} href={linkUrl} className="block bg-[#1e1e1e] border border-[#3a3a3a] p-4 rounded hover:bg-[#2a2a2a] hover:border-[#cca052] transition-all group">
-                                    <div className="text-[#729fcf] font-bold text-lg group-hover:text-[#cca052] truncate">{displayTitle}</div>
+                                <Link key={idx} href={linkUrl}
+                                      className="block bg-[#1e1e1e] border border-[#3a3a3a] p-4 rounded hover:bg-[#2a2a2a] hover:border-[#cca052] transition-all group">
+                                    <div
+                                        className="text-[#729fcf] font-bold text-lg group-hover:text-[#cca052] truncate">{displayTitle}</div>
                                     <div className="text-xs text-gray-500 mt-2 flex justify-between">
                                         <span>View Analytics</span>
                                         <span>→</span>
