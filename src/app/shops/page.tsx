@@ -5,7 +5,7 @@ import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
 import regionData from '@/data/regions.json';
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -20,69 +20,48 @@ interface ShopPreview {
     regionName: string;
 }
 
+interface ShopListRow {
+    shop_name: string;
+    net_profit: number;
+    region_id: number | null;
+}
+
 export default function ShopsHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [shops, setShops] = useState<ShopPreview[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [sortMode, setSortMode] = useState<"alpha" | "profit" | "loss">("alpha");
 
     useEffect(() => {
+        setShops([]);
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchShops() {
             setIsLoading(true);
-            const {data} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>category', 'Shopping')
-                .order('id', {ascending: false})
-                .limit(10000);
+            const {data, error} = await supabase.rpc('get_shop_list', {
+                p_character_id: activeCharacter!.id,
+            });
+
+            if (error) console.error("Database Error:", error);
 
             if (data) {
-                const shopMap: Record<string, ShopPreview> = {};
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-
-                    const shopName = log.source;
-                    const action = (log.eventType || "").toUpperCase();
-
-                    if (!shopName) return;
-
-                    if (!shopMap[shopName]) {
-                        const rId = log.regionId ? String(log.regionId) : "Unknown";
-                        const regionName = regionDictionary[rId] || (log.regionId ? `Region ${log.regionId}` : "Unknown Location");
-                        shopMap[shopName] = { name: shopName, netProfit: 0, regionName };
-                    }
-
-                    if (action === 'SHOP_TRANSACTION') {
-                        const gained = log.items || [];
-                        const gainedCoins = gained.find((i: LogItem) => i.name === "Coins");
-
-                        if (gainedCoins) {
-                            shopMap[shopName].netProfit += gainedCoins.qty;
-                        } else {
-                            if (log.note && log.note.includes("Spent:")) {
-                                const match = log.note.match(/Spent:\s*(\d+)x\s*(.*)/);
-                                if (match && (!match[2] || match[2].trim() === "Coins")) {
-                                    shopMap[shopName].netProfit -= parseInt(match[1], 10);
-                                }
-                            }
-                        }
-                    } else if (action === 'SHOP_SPEND') {
-                        const coins = log.items?.[0]?.qty || 0;
-                        shopMap[shopName].netProfit -= coins;
-                    } else if (action === 'SHOP_RECEIVE') {
-                        const coins = log.items?.[0]?.qty || 0;
-                        shopMap[shopName].netProfit += coins;
-                    }
-                });
-
-                setShops(Object.values(shopMap));
+                setShops((data as ShopListRow[]).map(row => ({
+                    name: row.shop_name,
+                    netProfit: Number(row.net_profit),
+                    regionName: row.region_id
+                        ? (regionDictionary[String(row.region_id)] || `Region ${row.region_id}`)
+                        : "Unknown Location",
+                })));
             }
             setIsLoading(false);
         }
 
         fetchShops();
-    }, []);
+    }, [activeCharacter, charLoading]);
 
     const sortedShops = [...shops].sort((a, b) => {
         if (sortMode === "alpha") return a.name.localeCompare(b.name);

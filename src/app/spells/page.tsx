@@ -4,7 +4,7 @@ import React, {useEffect, useState} from 'react';
 import Link from 'next/link';
 import {createClient} from '@supabase/supabase-js';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -64,37 +64,31 @@ const SpellGrid = ({ title, spells, colorClass }: { title: string, spells: strin
 };
 
 export default function SpellsHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [castSpells, setCastSpells] = useState<Set<string>>(new Set());
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
+        setCastSpells(new Set());
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchUnlockedSpells() {
             setIsLoading(true);
 
-            // Fetch Casts OR Magic XP
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .or('log_data->>eventType.eq.SPELL_CAST,log_data->>eventType.eq.MONSTER_EXAMINE,log_data->>skill.eq.Magic')
-                .limit(10000);
+            const {data, error} = await supabase.rpc('get_spell_list', {
+                p_character_id: activeCharacter!.id,
+            });
 
             if (error) console.error("Database Error:", error);
 
             if (data) {
                 const uniqueSpells = new Set<string>();
-                const invalidSources = ["Generic Magic", "Unknown", "None", "Goblin", "Activity"];
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    // Ignore quest XP drops!
-                    if (!log || log.category === 'Quests') return;
-
-                    let src = log.source;
-                    if (src && src.includes("->")) src = src.split("->")[0].trim();
-
-                    if (src && !invalidSources.includes(src)) {
-                        uniqueSpells.add(src);
-                    }
+                (data as { spell_name: string }[]).forEach(row => {
+                    if (row.spell_name) uniqueSpells.add(row.spell_name);
                 });
                 setCastSpells(uniqueSpells);
             }
@@ -102,7 +96,7 @@ export default function SpellsHub() {
         }
 
         fetchUnlockedSpells();
-    }, []);
+    }, [activeCharacter, charLoading]);
 
     const activeCombat = COMBAT_SPELLS.filter(s => castSpells.has(s));
     const activeTeleports = TELEPORT_SPELLS.filter(s => castSpells.has(s));

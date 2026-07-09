@@ -4,7 +4,7 @@ import React, {useState, useEffect} from 'react';
 import {useRouter} from 'next/navigation';
 import Link from 'next/link';
 import {createClient} from '@supabase/supabase-js';
-import {DatabaseRow} from '@/lib/types';
+import {useCharacter} from '@/lib/CharacterContext';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -12,51 +12,62 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 export default function HomePage() {
     const router = useRouter();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [searchInput, setSearchInput] = useState("");
     const [recentSources, setRecentSources] = useState<{ name: string, category: string }[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [userEmail, setUserEmail] = useState<string | null>(null);
+    const [authChecked, setAuthChecked] = useState(false);
 
     useEffect(() => {
+        async function checkAuth() {
+            const {data: {user}} = await supabase.auth.getUser();
+            if (!user) {
+                router.push('/login');
+                return;
+            }
+            setUserEmail(user.email ?? null);
+            setAuthChecked(true);
+        }
+        checkAuth();
+
+        const {data: listener} = supabase.auth.onAuthStateChange((_event, session) => {
+            if (!session?.user) {
+                router.push('/login');
+                return;
+            }
+            setUserEmail(session.user.email ?? null);
+        });
+
+        return () => listener.subscription.unsubscribe();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+        setRecentSources([]);
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchRecent() {
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .order('id', {ascending: false})
-                .limit(150);
+            setIsLoading(true);
+            const {data, error} = await supabase.rpc('get_recent_sources', {
+                p_character_id: activeCharacter!.id,
+            });
 
             if (error) {
                 console.error("Database Error:", error);
             } else if (data) {
-                const uniqueSources = new Map<string, string>();
-
-                const ignoredSources = [
-                    "Pickup", "Unknown/Pickup", "None", "Bank", "Activity", "NPC / System"
-                ];
-                const ignoredCategories = ["NPC Interaction", "Events & Rewards", "Miscellaneous"];
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    const category = log.category || 'Combat';
-                    const targetName = (category === 'Skilling' && log.skill) ? log.skill : log.source;
-
-                    if (targetName && !ignoredSources.includes(targetName) && !ignoredCategories.includes(category)) {
-                        if (!uniqueSources.has(targetName)) {
-                            uniqueSources.set(targetName, category);
-                        }
-                    }
-                });
-
-                const formattedSources = Array.from(uniqueSources.entries())
-                    .map(([name, category]) => ({name, category}))
-                    .slice(0, 8);
-
-                setRecentSources(formattedSources);
+                setRecentSources((data as { name: string, category: string }[])
+                    .map(row => ({name: row.name, category: row.category || 'Combat'})));
             }
             setIsLoading(false);
         }
 
         fetchRecent();
-    }, []);
+    }, [activeCharacter, charLoading]);
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -65,15 +76,15 @@ export default function HomePage() {
 
         const urlSlug = trimmed.toLowerCase().replace(/ /g, '_');
 
-        const {data} = await supabase
-            .from('loot_logs')
-            .select('log_data')
-            .ilike('log_data->>source', `%${trimmed}%`)
-            .limit(1);
+        const {data} = activeCharacter
+            ? await supabase.rpc('search_sources', {
+                p_character_id: activeCharacter.id,
+                p_query: trimmed,
+            })
+            : {data: null};
 
         if (data && data.length > 0) {
-            const row = data[0] as DatabaseRow;
-            const category = row.log_data.category;
+            const category = data[0].category;
 
             if (category === 'Skilling' || category === 'Experience') {
                 router.push(`/xp/${urlSlug}`);
@@ -91,9 +102,26 @@ export default function HomePage() {
         setSearchInput("");
     };
 
+    if (!authChecked) {
+        return (
+            <div className="min-h-screen bg-[#121212] flex items-center justify-center">
+                <p className="text-gray-500 italic font-sans">Loading...</p>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen bg-[#121212] text-[#c8c8c8] flex flex-col items-center p-8 font-sans w-full">
-            <div className="mt-20 text-center mb-12">
+            <div className="w-full max-w-4xl flex justify-end mb-4">
+                <Link
+                    href="/account"
+                    className="text-sm px-4 py-2 bg-[#1e1e1e] border border-[#3a3a3a] hover:border-[#cca052] hover:text-[#cca052] rounded transition-colors"
+                >
+                    {userEmail}
+                </Link>
+            </div>
+
+            <div className="mt-10 text-center mb-12">
                 <h1 className="text-5xl font-serif text-[#ffffff] mb-4 tracking-wide">
                     OSRS Live Analytics
                 </h1>

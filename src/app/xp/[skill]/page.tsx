@@ -5,7 +5,9 @@ import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
-import {DatabaseRow} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
+import { usePeriod } from '@/lib/PeriodContext';
+import { SkillProgressionChart, SkillProgressionPoint } from '@/components/ProgressionChart';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,8 +20,16 @@ interface SkillingActionStat {
     actionCount: number;
 }
 
+interface SkillDetailResult {
+    total_xp: number;
+    training: { source: string; xp: number; actions: number }[];
+    quest_xp: { source: string; xp: number }[];
+}
+
 export default function IndividualSkillPage() {
     const params = useParams();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
+    const { period } = usePeriod();
     const rawSkill = typeof params?.skill === 'string' ? params.skill : '';
     const skillName = rawSkill.replace(/_/g, ' ');
 
@@ -27,97 +37,58 @@ export default function IndividualSkillPage() {
     const [totalSkillXp, setTotalSkillXp] = useState(0);
     const [actionStats, setActionStats] = useState<SkillingActionStat[]>([]);
     const [questStats, setQuestStats] = useState<SkillingActionStat[]>([]); // New state for Quest XP
+    const [progression, setProgression] = useState<SkillProgressionPoint[]>([]);
 
     useEffect(() => {
+        setTotalSkillXp(0);
+        setActionStats([]);
+        setQuestStats([]);
+        setProgression([]);
+
+        if (charLoading || !activeCharacter) {
+            if (!charLoading) setIsLoading(false);
+            return;
+        }
+
         async function fetchSkillData() {
             setIsLoading(true);
 
-            const query = skillName === "Magic"
-                ? `log_data->>skill.eq.Magic,log_data->>eventType.eq.SPELL_CAST`
-                : `log_data->>skill.eq.${skillName}`;
+            const [detailRes, progressionRes] = await Promise.all([
+                supabase.rpc('get_skill_detail', {
+                    p_character_id: activeCharacter!.id,
+                    p_skill_name: skillName,
+                    p_period: period,
+                }),
+                supabase.rpc('get_skill_progression', {
+                    p_character_id: activeCharacter!.id,
+                    p_skill_name: skillName,
+                }),
+            ]);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .or(query)
-                .order('id', {ascending: false})
-                .limit(15000);
+            if (detailRes.error) console.error(detailRes.error);
+            if (progressionRes.error) console.error(progressionRes.error);
 
-            if (error) {
-                console.error(error);
-                setIsLoading(false);
-                return;
+            const detail = detailRes.data as SkillDetailResult | null;
+            if (detail) {
+                setTotalSkillXp(Number(detail.total_xp) || 0);
+                setActionStats((detail.training || []).map(t => ({
+                    name: t.source,
+                    totalXp: Number(t.xp),
+                    actionCount: Number(t.actions),
+                })));
+                setQuestStats((detail.quest_xp || []).map(q => ({
+                    name: q.source,
+                    totalXp: Number(q.xp),
+                    actionCount: 0,
+                })));
             }
 
-            let xp = 0;
-            const trainingMap = new Map<string, { name: string, totalXp: number, ticks: Set<number> }>();
-            const questMap = new Map<string, { name: string, totalXp: number, ticks: Set<number> }>();
-
-            const magicCastEvents: { time: number, source: string }[] = [];
-            if (skillName === "Magic") {
-                data?.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-                    if (log.eventType === 'SPELL_CAST') {
-                        let src = log.source;
-                        if (src && src.includes("->")) src = src.split("->")[0].trim();
-                        if (src && src !== "Generic Magic" && log.timestamp) {
-                            magicCastEvents.push({ time: new Date(log.timestamp).getTime(), source: src });
-                        }
-                    }
-                });
-            }
-
-            data?.forEach((row: DatabaseRow) => {
-                const log = row.log_data;
-                if (!log) return;
-
-                const actionType = log.eventType || "";
-                const logTime = log.timestamp ? new Date(log.timestamp).getTime() : 0;
-                const tickId = Math.floor(logTime / 600);
-
-                if (actionType === "XP_GAIN" && log.skill === skillName) {
-                    let rawSource = log.source || "Unknown Activity";
-
-                    if (rawSource.includes("->")) {
-                        rawSource = rawSource.split("->")[0].trim();
-                    }
-
-                    if (skillName === "Magic" && (rawSource === "Generic Magic" || rawSource === "Activity")) {
-                        const matchingCast = magicCastEvents.find(e => Math.abs(e.time - logTime) < 600);
-                        if (matchingCast) rawSource = matchingCast.source;
-                    }
-
-                    xp += (log.xpGained || 0);
-
-                    // Separate Sustainable Training from Quest Rewards
-                    const isQuest = log.category === 'Quests' || rawSource === 'Quest Reward' || rawSource.toLowerCase().includes('quest');
-                    const targetMap = isQuest ? questMap : trainingMap;
-
-                    if (!targetMap.has(rawSource)) {
-                        targetMap.set(rawSource, { name: rawSource, totalXp: 0, ticks: new Set<number>() });
-                    }
-
-                    const stat = targetMap.get(rawSource)!;
-                    stat.totalXp += (log.xpGained || 0);
-                    stat.ticks.add(tickId);
-                }
-            });
-
-            const formatStats = (map: Map<string, any>) => Array.from(map.values()).map(stat => ({
-                name: stat.name,
-                totalXp: stat.totalXp,
-                actionCount: stat.ticks.size
-            })).sort((a, b) => b.totalXp - a.totalXp);
-
-            setTotalSkillXp(xp);
-            setActionStats(formatStats(trainingMap));
-            setQuestStats(formatStats(questMap));
+            setProgression((progressionRes.data as SkillProgressionPoint[]) || []);
             setIsLoading(false);
         }
 
         if (skillName) fetchSkillData();
-    }, [skillName]);
+    }, [skillName, activeCharacter, charLoading, period]);
 
     return (
         <WikiLayout>
@@ -192,6 +163,11 @@ export default function IndividualSkillPage() {
                                 )}
                                 </tbody>
                             </table>
+                        </div>
+
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Weekly Progression</h2>
+                        <div className="mb-10">
+                            <SkillProgressionChart data={progression} />
                         </div>
 
                         {/* Quests Experience Table */}

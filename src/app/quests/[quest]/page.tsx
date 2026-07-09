@@ -5,6 +5,7 @@ import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,6 +15,15 @@ const supabase = createClient(
 interface QuestReward {
     skill: string;
     xp: number;
+}
+
+interface QuestDetailResult {
+    state: string;
+    start_time: string | null;
+    finish_time: string | null;
+    in_game_ticks: number | null;
+    xp_rewards: { skill: string; xp: number }[];
+    item_rewards: { name: string; qty: number }[];
 }
 
 interface WikiMetadata {
@@ -39,6 +49,7 @@ function formatDuration(totalSeconds: number) {
 
 export default function IndividualQuestPage() {
     const params = useParams();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const rawQuest = typeof params?.quest === 'string' ? params.quest : '';
     const questName = decodeURIComponent(rawQuest).replace(/_/g, ' ');
 
@@ -54,59 +65,44 @@ export default function IndividualQuestPage() {
     const [wikiData, setWikiData] = useState<WikiMetadata>({ difficulty: '-', length: '-', series: '-' });
 
     useEffect(() => {
+        setStatus("NOT STARTED");
+        setStartTime(null);
+        setFinishTime(null);
+        setInGameSeconds(null);
+        setXpRewards([]);
+        setItemRewards([]);
+
+        if (charLoading || !activeCharacter) {
+            if (!charLoading) setIsLoading(false);
+            return;
+        }
+
         async function fetchQuestDetails() {
             setIsLoading(true);
 
-            const {data: questLogs, error: qError} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>source', questName)
-                .order('id', {ascending: true});
+            const {data, error: qError} = await supabase.rpc('get_quest_detail', {
+                p_character_id: activeCharacter!.id,
+                p_quest_name: questName,
+            });
 
             if (qError) {
                 console.error(qError);
-            } else if (questLogs) {
-                let start: Date | null = null;
-                let end: Date | null = null;
-                let trackedSeconds: number | null = null;
+            } else if (data) {
+                const detail = data as QuestDetailResult;
 
-                const xpMap: Record<string, number> = {};
-                const itemMap: Record<string, number> = {};
+                setStartTime(detail.start_time ? new Date(detail.start_time) : null);
+                setFinishTime(detail.finish_time ? new Date(detail.finish_time) : null);
+                setInGameSeconds(
+                    detail.in_game_ticks && detail.in_game_ticks > 0
+                        ? Math.floor(Number(detail.in_game_ticks) * 0.6)
+                        : null
+                );
 
-                for (const row of questLogs) {
-                    const log = row.log_data as any;
+                if (detail.state === 'FINISHED') setStatus("FINISHED");
+                else if (detail.state === 'IN_PROGRESS') setStatus("IN PROGRESS");
 
-                    if (log.eventType === 'QUEST_PROGRESS') {
-                        if (log.target === "IN_PROGRESS" && !start) start = new Date(log.timestamp);
-                        if (log.target === "FINISHED") {
-                            end = new Date(log.timestamp);
-                            if (log.note?.startsWith("In-Game Ticks: ")) {
-                                const ticks = parseInt(log.note.replace("In-Game Ticks: ", ""));
-                                if (!isNaN(ticks) && ticks > 0) trackedSeconds = Math.floor(ticks * 0.6);
-                            }
-                        }
-                    }
-
-                    if (log.eventType === 'XP_GAIN') {
-                        xpMap[log.skill] = (xpMap[log.skill] || 0) + log.xpGained;
-                    }
-
-                    if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
-                        log.items.forEach((item: any) => {
-                            itemMap[item.name] = (itemMap[item.name] || 0) + item.qty;
-                        });
-                    }
-                }
-
-                setStartTime(start);
-                setFinishTime(end);
-                setInGameSeconds(trackedSeconds);
-
-                if (end) setStatus("FINISHED");
-                else if (start) setStatus("IN PROGRESS");
-
-                setXpRewards(Object.entries(xpMap).map(([skill, xp]) => ({ skill, xp })));
-                setItemRewards(Object.entries(itemMap).map(([name, qty]) => ({ name, qty })));
+                setXpRewards((detail.xp_rewards || []).map(r => ({ skill: r.skill, xp: Number(r.xp) })));
+                setItemRewards((detail.item_rewards || []).map(i => ({ name: i.name, qty: Number(i.qty) })));
             }
 
             try {
@@ -137,7 +133,7 @@ export default function IndividualQuestPage() {
         }
 
         if (questName) fetchQuestDetails();
-    }, [questName]);
+    }, [questName, activeCharacter, charLoading]);
 
     let calendarDuration = "-";
     if (startTime && finishTime) {

@@ -4,7 +4,8 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
+import { usePeriod } from '@/lib/PeriodContext';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -63,43 +64,35 @@ const SkillGrid = ({title, skills, skillStats}: {
 );
 
 export default function SkillingHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
+    const { period } = usePeriod();
     const [skillStats, setSkillStats] = useState<Record<string, number>>({});
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
+        setSkillStats({});
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchSkillingData() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .or('log_data->>category.eq.Skilling,log_data->>category.eq.Combat,log_data->>eventType.eq.XP_GAIN')
-                .order('id', {ascending: false})
-                .limit(20000);
+            const {data, error} = await supabase.rpc('get_skill_summary', {
+                p_character_id: activeCharacter!.id,
+                p_period: period,
+            });
 
             if (error) console.error("Database Error:", error);
 
             if (data) {
                 const stats: Record<string, number> = {};
 
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-
-                    let targetSkill = log.skill;
-                    if (!targetSkill && log.category === 'Skilling') {
-                        targetSkill = log.source;
-                    }
-
-                    const evt = (log.eventType || log.action || "").toUpperCase();
-                    const isValidAction = ['', 'GATHER_GAIN', 'SPELL_CAST', 'RANGED_FIRE', 'XP_GAIN'].includes(evt);
-
-                    if (targetSkill && isValidAction) {
-                        const cleanSkill = targetSkill.charAt(0).toUpperCase() + targetSkill.slice(1).toLowerCase();
-
-                        if (ALL_SKILLS.includes(cleanSkill)) {
-                            stats[cleanSkill] = (stats[cleanSkill] || 0) + 1;
-                        }
+                (data as { skill_name: string; action_count: number; total_xp: number }[]).forEach(row => {
+                    if (row.skill_name && ALL_SKILLS.includes(row.skill_name)) {
+                        stats[row.skill_name] = (stats[row.skill_name] || 0) + Number(row.action_count);
                     }
                 });
 
@@ -109,7 +102,7 @@ export default function SkillingHub() {
         }
 
         fetchSkillingData();
-    }, []);
+    }, [activeCharacter, charLoading, period]);
 
     return (
         <WikiLayout>

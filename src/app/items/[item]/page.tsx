@@ -4,10 +4,9 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
-import {LEGACY_ID_MAP} from '@/lib/constants';
 import regionData from '@/data/regions.json';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -24,11 +23,24 @@ interface ItemSourceStat {
     regions: Set<string>;
 }
 
-// --- OPTIMIZATION CONSTANTS ---
-const IGNORED_ACTIONS = new Set(['CONSUME', 'DESTROY', 'DROP', 'PICKUP', 'TAKE', 'BANK_DEPOSIT', 'BANK_WITHDRAWAL', 'BANK_SNAPSHOT', 'EQUIP', 'UNEQUIP']);
+interface ItemDetailResult {
+    item_id: number | null;
+    ge_unit: number;
+    ha_unit: number;
+    total_qty: number;
+    sources: {
+        source_name: string;
+        category: string;
+        skill_name: string | null;
+        qty: number;
+        times_dropped: number;
+        region_ids: number[] | null;
+    }[];
+}
 
 export default function IndividualItemPage() {
     const params = useParams();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const safeItemParam = typeof params?.item === 'string' ? params.item : "Unknown";
     const rawTarget = decodeURIComponent(safeItemParam);
     const itemNameTarget = rawTarget.replace(/_/g, ' ');
@@ -43,82 +55,47 @@ export default function IndividualItemPage() {
     const [itemId, setItemId] = useState<number | null>(null);
 
     useEffect(() => {
+        setSourceStats([]);
+        setTotalQuantity(0);
+        setSingleGePrice(0);
+        setSingleHaPrice(0);
+        setItemId(null);
+
+        if (charLoading || !activeCharacter) {
+            if (!charLoading) setIsLoading(false);
+            return;
+        }
+
         async function fetchItemData() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .contains('log_data', {items: [{name: displayTitle}]})
-                .order('id', {ascending: false})
-                .limit(5000);
+            const {data, error} = await supabase.rpc('get_item_detail', {
+                p_character_id: activeCharacter!.id,
+                p_item_name: itemNameTarget,
+            });
 
             if (error) console.error("Database Error:", error);
 
-            if (data) {
-                const statsMap: Record<string, ItemSourceStat> = {};
-                let totalQty = 0;
-                let ge = 0;
-                let ha = 0;
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-
-                    const evt = (log.eventType || log.action || "").toUpperCase();
-
-                    if (evt && IGNORED_ACTIONS.has(evt)) return;
-
-                    if (log.items && log.items.length > 0) {
-                        log.items.forEach((item: LogItem) => {
-                            const currentName = (item.name || LEGACY_ID_MAP[item.id] || `Unknown`).trim();
-                            const targetName = itemNameTarget.trim();
-
-                            if (currentName.toLowerCase() === targetName.toLowerCase()) {
-                                setItemId((prevId) => prevId || item.id);
-
-                                const itemGE = item.GE || 0;
-                                const itemHA = item.HA || 0;
-                                if (ge === 0 && itemGE > 0) ge = itemGE / item.qty;
-                                if (ha === 0 && itemHA > 0) ha = itemHA / item.qty;
-
-                                const source = log.source || "Unknown Source";
-                                const category = log.category || "Unknown";
-
-                                if (!statsMap[source]) {
-                                    statsMap[source] = {
-                                        sourceName: source,
-                                        skillName: log.skill,
-                                        category: category,
-                                        quantityDropped: 0,
-                                        timesDropped: 0,
-                                        regions: new Set()
-                                    };
-                                }
-
-                                statsMap[source].quantityDropped += item.qty;
-                                statsMap[source].timesDropped += 1;
-
-                                if (log.regionId) {
-                                    statsMap[source].regions.add(String(log.regionId));
-                                }
-
-                                totalQty += item.qty;
-                            }
-                        });
-                    }
-                });
-
-                setSourceStats(Object.values(statsMap).sort((a, b) => b.quantityDropped - a.quantityDropped));
-                setTotalQuantity(totalQty);
-                setSingleGePrice(ge);
-                setSingleHaPrice(ha);
+            const detail = data as ItemDetailResult | null;
+            if (detail) {
+                setItemId(detail.item_id);
+                setSingleGePrice(Number(detail.ge_unit) || 0);
+                setSingleHaPrice(Number(detail.ha_unit) || 0);
+                setTotalQuantity(Number(detail.total_qty) || 0);
+                setSourceStats((detail.sources || []).map(s => ({
+                    sourceName: s.source_name,
+                    skillName: s.skill_name ?? undefined,
+                    category: s.category,
+                    quantityDropped: Number(s.qty),
+                    timesDropped: Number(s.times_dropped),
+                    regions: new Set((s.region_ids ?? []).map(String)),
+                })));
             }
             setIsLoading(false);
         }
 
         fetchItemData();
-    }, [itemNameTarget, displayTitle]);
+    }, [itemNameTarget, activeCharacter, charLoading]);
 
     const totalValue = totalQuantity * (isIronman ? singleHaPrice : singleGePrice);
 

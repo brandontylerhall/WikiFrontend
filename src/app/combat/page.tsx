@@ -4,7 +4,8 @@ import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
+import { usePeriod } from '@/lib/PeriodContext';
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
@@ -26,11 +27,6 @@ interface RangedSupplyStat {
     unitGe: number;
     unitHa: number;
 }
-
-const CONSUME_ACTIONS = new Set(['CONSUME', 'COMBAT_CONSUME', 'SKILLING_CONSUME']);
-const MAGIC_ACTIONS = new Set(['SPELL_CAST', 'TELEPORT']);
-const POTION_KEYWORDS = ['potion', 'brew', 'restore', 'stamina', 'antifire', 'serum', 'elixir'];
-const AMMO_KEYWORDS = ['arrow', 'bolt', 'dart', 'knife', 'javelin', 'chinchompa'];
 
 const calculateCost = (supplies: SupplyStat[], isIronman: boolean) => {
     return supplies.reduce((total, item) => total + (item.qtyUsed * (isIronman ? item.unitHa : item.unitGe)), 0);
@@ -206,7 +202,16 @@ const RangedSupplyTable = ({title, supplies, colorClass, emptyMsg, isIronman, is
     );
 };
 
+interface CombatCostsResult {
+    runes: { name: string; qty: number; ge_unit: number; ha_unit: number }[];
+    ammo: { name: string; fired: number; retrieved: number; ge_unit: number; ha_unit: number }[];
+    food: { name: string; qty: number; hp_healed: number; ge_unit: number; ha_unit: number }[];
+    potions: { name: string; qty: number; ge_unit: number; ha_unit: number }[];
+}
+
 export default function CombatHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
+    const { period } = usePeriod();
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
@@ -216,79 +221,49 @@ export default function CombatHub() {
     const [potionSupplies, setPotionSupplies] = useState<ConsumableStat[]>([]);
 
     useEffect(() => {
+        setMagicSupplies([]);
+        setRangedSupplies([]);
+        setConsumableSupplies([]);
+        setPotionSupplies([]);
+
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchCombatLogs() {
             setIsLoading(true);
-            const {data} = await supabase.from('loot_logs').select('log_data').order('id', {ascending: false}).limit(10000);
+            const {data, error} = await supabase.rpc('get_combat_costs', {
+                p_character_id: activeCharacter!.id,
+                p_period: period,
+            });
 
-            if (data) {
-                const magicMap: Record<string, SupplyStat> = {};
-                const rangedMap: Record<string, RangedSupplyStat> = {};
-                const foodMap: Record<string, ConsumableStat> = {};
-                const potionMap: Record<string, ConsumableStat> = {};
+            if (error) console.error("Database Error:", error);
 
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-
-                    const action = (log.eventType || log.action || "").toUpperCase();
-                    const isConsume = CONSUME_ACTIONS.has(action);
-                    const isTakeOrGround = action === 'TAKE' || (action === 'GATHER_GAIN' && log.source === 'None');
-                    const isMagic = MAGIC_ACTIONS.has(action);
-
-                    if (!isMagic && action !== 'RANGED_FIRE' && !isConsume && !isTakeOrGround) return;
-
-                    log.items?.forEach((item: LogItem) => {
-                        const name = item.name || "Unknown";
-                        const lowerName = name.toLowerCase();
-
-                        if (isMagic) {
-                            if (!magicMap[name]) magicMap[name] = {name, qtyUsed: 0, unitGe: 0, unitHa: 0};
-                            magicMap[name].qtyUsed += item.qty;
-                            if (magicMap[name].unitGe === 0) magicMap[name].unitGe = (item.GE || 0) / item.qty;
-                            if (magicMap[name].unitHa === 0) magicMap[name].unitHa = (item.HA || 0) / item.qty;
-                        }
-                        else if (isConsume) {
-                            const hpHealed = (log as any).hpHealed || 0;
-                            const isPotion = POTION_KEYWORDS.some(p => lowerName.includes(p));
-
-                            const targetMap = isPotion ? potionMap : foodMap;
-                            if (!targetMap[name]) targetMap[name] = {
-                                name, qtyUsed: 0, hpHealed: 0, unitGe: 0, unitHa: 0
-                            };
-
-                            targetMap[name].qtyUsed += item.qty;
-                            targetMap[name].hpHealed += hpHealed;
-                            if (targetMap[name].unitGe === 0) targetMap[name].unitGe = (item.GE || 0) / item.qty;
-                            if (targetMap[name].unitHa === 0) targetMap[name].unitHa = (item.HA || 0) / item.qty;
-                        }
-                        else if (action === 'RANGED_FIRE') {
-                            if (!rangedMap[name]) rangedMap[name] = { name, qtyFired: 0, qtyRetrieved: 0, unitGe: 0, unitHa: 0 };
-                            rangedMap[name].qtyFired += item.qty;
-                            if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
-                            if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
-                        }
-                        else if (isTakeOrGround) {
-                            const isAmmo = AMMO_KEYWORDS.some(a => lowerName.includes(a));
-                            if (isAmmo) {
-                                if (!rangedMap[name]) rangedMap[name] = { name, qtyFired: 0, qtyRetrieved: 0, unitGe: 0, unitHa: 0 };
-                                rangedMap[name].qtyRetrieved += item.qty;
-                                if (rangedMap[name].unitGe === 0) rangedMap[name].unitGe = (item.GE || 0) / item.qty;
-                                if (rangedMap[name].unitHa === 0) rangedMap[name].unitHa = (item.HA || 0) / item.qty;
-                            }
-                        }
-                    });
-                });
-
-                setMagicSupplies(Object.values(magicMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
-                setRangedSupplies(Object.values(rangedMap).sort((a, b) => b.qtyFired - a.qtyFired));
-                setConsumableSupplies(Object.values(foodMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
-                setPotionSupplies(Object.values(potionMap).sort((a, b) => b.qtyUsed - a.qtyUsed));
+            const costs = data as CombatCostsResult | null;
+            if (costs) {
+                setMagicSupplies((costs.runes || []).map(r => ({
+                    name: r.name, qtyUsed: Number(r.qty), unitGe: Number(r.ge_unit), unitHa: Number(r.ha_unit),
+                })));
+                setRangedSupplies((costs.ammo || []).map(a => ({
+                    name: a.name, qtyFired: Number(a.fired), qtyRetrieved: Number(a.retrieved),
+                    unitGe: Number(a.ge_unit), unitHa: Number(a.ha_unit),
+                })));
+                setConsumableSupplies((costs.food || []).map(f => ({
+                    name: f.name, qtyUsed: Number(f.qty), hpHealed: Number(f.hp_healed),
+                    unitGe: Number(f.ge_unit), unitHa: Number(f.ha_unit),
+                })));
+                setPotionSupplies((costs.potions || []).map(p => ({
+                    name: p.name, qtyUsed: Number(p.qty), hpHealed: 0,
+                    unitGe: Number(p.ge_unit), unitHa: Number(p.ha_unit),
+                })));
             }
             setIsLoading(false);
         }
 
         fetchCombatLogs();
-    }, []);
+    }, [activeCharacter, charLoading, period]);
 
     const absoluteTotalCost = calculateCost(magicSupplies, isIronman) + calculateRangedCost(rangedSupplies, isIronman) + calculateCost(foodSupplies, isIronman) + calculateCost(potionSupplies, isIronman);
 

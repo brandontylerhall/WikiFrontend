@@ -1,17 +1,17 @@
 "use client";
-
-import React, {useEffect, useState} from 'react';
-import {createClient} from '@supabase/supabase-js';
-import {useParams, useRouter} from 'next/navigation';
+import React, { useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import regionData from '@/data/regions.json';
-import {LEGACY_ID_MAP} from '@/lib/constants';
-import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
+import { categorizeItem, CATEGORY_ORDER } from '@/lib/utils';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow, LogItem, AggregatedDrop, AggregatedLocation} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
+import { usePeriod } from '@/lib/PeriodContext';
+import { AggregatedDrop, AggregatedLocation } from '@/lib/types';
+import { MonsterProgressionChart, MonsterProgressionPoint } from '@/components/ProgressionChart';
 
 const regionDictionary: Record<string, string> = regionData;
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -23,6 +23,17 @@ interface RawDropRecord {
     gePrice: number;
     haPrice: number;
     firstKc: number;
+}
+
+interface MonsterStatsResult {
+    kill_count: number;
+    avg_ttk_seconds: number;
+    gp_per_kill: number;
+    kills_per_hour: number;
+    gp_per_hour: number;
+    drops: { name: string; qty: number; count: number; ge_unit: number; ha_unit: number }[];
+    locations: { region_id: number; count: number }[];
+    examine_note: string | null;
 }
 
 const formatDecimal = (num: number): string => {
@@ -42,8 +53,7 @@ function getRarity(count: number, total: number) {
 
 function parseMonsterExamine(note: string) {
     const stats = {
-        combat: "?", hp: "?",
-        atk: "?", str: "?", def: "?", mage: "?", range: "?",
+        combat: "?", hp: "?", atk: "?", str: "?", def: "?", mage: "?", range: "?",
         atkSpeed: "?", atkBonus: "?", strBonus: "?",
         defStab: "?", defSlash: "?", defCrush: "?", defMage: "?",
         defLight: "?", defStandard: "?", defHeavy: "?",
@@ -76,9 +86,7 @@ function parseMonsterExamine(note: string) {
         }
         if (seg.startsWith("Other Attributes")) {
             const attr = seg.replace("Other Attributes", "").replace(/^-/, "").trim();
-            if (attr && !stats.attributes.includes(attr)) {
-                stats.attributes.push(attr);
-            }
+            if (attr && !stats.attributes.includes(attr)) stats.attributes.push(attr);
         }
     }
     return stats;
@@ -86,7 +94,8 @@ function parseMonsterExamine(note: string) {
 
 export default function IndividualMonsterPage() {
     const params = useParams();
-    const router = useRouter();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
+    const { period } = usePeriod();
     const rawTarget = decodeURIComponent((params.monster as string) || "Unknown");
     const targetName = rawTarget.replace(/_/g, ' ');
     const displayTitle = targetName.charAt(0).toUpperCase() + targetName.slice(1);
@@ -97,86 +106,27 @@ export default function IndividualMonsterPage() {
     const [totalKills, setTotalKills] = useState(0);
     const [aggregatedDrops, setAggregatedDrops] = useState<AggregatedDrop[]>([]);
     const [aggregatedLocations, setAggregatedLocations] = useState<AggregatedLocation[]>([]);
-
-    // NEW TTK STATES
     const [avgTtkSeconds, setAvgTtkSeconds] = useState<number>(0);
+    const [progression, setProgression] = useState<MonsterProgressionPoint[]>([]);
 
     const totalValue = aggregatedDrops
         .filter(drop => !drop.isSummary && drop.name !== "Nothing")
         .reduce((acc, drop) => acc + ((isIronman ? drop.haPrice : drop.gePrice) * drop.totalQty), 0);
-
     const gpPerKill = totalKills > 0 ? Math.floor(totalValue / totalKills) : 0;
-
-    // NEW: Calculate extrapolated values based on TTK
     const killsPerHour = avgTtkSeconds > 0 ? Math.floor(3600 / avgTtkSeconds) : 0;
     const gpPerHour = killsPerHour * gpPerKill;
 
-    function processAnalytics(rawData: DatabaseRow[]) {
-        // We need chronological order to accurately track TTK (First Hit -> Drop)
-        const chronoLogs = [...rawData].reverse();
-
-        let killCount = 0;
-        let totalTtkMs = 0;
-        let validTtkSamples = 0;
-        let currentKillStartTime: number | null = null;
-
-        const locMap: Record<string, number> = {};
-        const rawDropMap: Record<string, RawDropRecord> = {};
-
-        chronoLogs.forEach(row => {
-            const data = row.log_data;
-            if (!data) return;
-
-            const action = (data.eventType || data.action || "").toUpperCase();
-            const ts = data.timestamp ? new Date(data.timestamp).getTime() : 0;
-
-            // TRACK TTK: Start timer on first XP gain
-            if (action === 'XP_GAIN') {
-                if (!currentKillStartTime && ts > 0) {
-                    currentKillStartTime = ts;
-                }
-                return; // XP logs don't have loot, skip the rest
-            }
-
-            // If we reach here, it's an NPC_DROP event (a kill)
-            killCount++;
-
-            // TRACK TTK: End timer and log sample
-            if (currentKillStartTime && ts > 0) {
-                const ttk = ts - currentKillStartTime;
-                // Filter out AFK kills (longer than 5 minutes) or instant bugs (< 0)
-                if (ttk > 0 && ttk < 300000) {
-                    totalTtkMs += ttk;
-                    validTtkSamples++;
-                }
-            }
-            currentKillStartTime = null; // Reset for the next monster
-
-            if (data.regionId) {
-                const rId = String(data.regionId);
-                locMap[rId] = (locMap[rId] || 0) + 1;
-            }
-
-            if (data.items) {
-                data.items.forEach((item: LogItem) => {
-                    const itemName = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
-                    const key = `${itemName}-${item.qty}`;
-                    const gePrice = (item.GE || 0) / item.qty;
-                    const haPrice = (item.HA || 0) / item.qty;
-
-                    if (!rawDropMap[key]) {
-                        rawDropMap[key] = { name: itemName, qty: item.qty, count: 0, gePrice, haPrice, firstKc: 0 };
-                    }
-                    rawDropMap[key].count += 1;
-                });
-            }
-        });
-
-        setTotalKills(killCount);
-        if (validTtkSamples > 0) setAvgTtkSeconds((totalTtkMs / validTtkSamples) / 1000);
-
+    function processDrops(rpcDrops: MonsterStatsResult['drops']) {
         const nameGroups: Record<string, RawDropRecord[]> = {};
-        Object.values(rawDropMap).forEach(drop => {
+        rpcDrops.forEach(row => {
+            const drop: RawDropRecord = {
+                name: row.name,
+                qty: Number(row.qty),
+                count: Number(row.count),
+                gePrice: Number(row.ge_unit),
+                haPrice: Number(row.ha_unit),
+                firstKc: 0
+            };
             if (!nameGroups[drop.name]) nameGroups[drop.name] = [];
             nameGroups[drop.name].push(drop);
         });
@@ -187,7 +137,6 @@ export default function IndividualMonsterPage() {
             const totalDropsOfItem = drops.reduce((sum, d) => sum + d.count, 0);
             const totalItemQty = drops.reduce((sum, d) => sum + (d.count * d.qty), 0);
             const baseDrop = drops[0];
-
             if (drops.length > 1) {
                 finalDrops.push({
                     name: `${baseDrop.name} (Average)`,
@@ -200,7 +149,6 @@ export default function IndividualMonsterPage() {
                     firstKc: 0
                 });
             }
-
             drops.forEach(d => {
                 finalDrops.push({
                     name: d.name,
@@ -215,41 +163,56 @@ export default function IndividualMonsterPage() {
             });
         });
 
-        setAggregatedLocations(Object.keys(locMap).map(key => ({regionId: key, count: locMap[key]})));
         setAggregatedDrops(finalDrops.sort((a, b) => b.count - a.count));
     }
 
     useEffect(() => {
+        setTotalKills(0);
+        setAggregatedDrops([]);
+        setAggregatedLocations([]);
+        setAvgTtkSeconds(0);
+        setExamineStats(null);
+        setProgression([]);
+
+        if (charLoading || !activeCharacter || targetName === "Unknown") return;
+
         async function fetchLogs() {
             setIsLoading(true);
 
-            // WE NOW FETCH DROPS AND XP TO CALCULATE TTK
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>source', targetName)
-                .or('log_data->>action.eq.NPC_DROP,log_data->>eventType.eq.NPC_DROP,log_data->>eventType.eq.XP_GAIN')
-                .order('id', {ascending: false})
-                .limit(10000);
+            const [statsRes, progressionRes] = await Promise.all([
+                supabase.rpc('get_monster_stats', {
+                    p_character_id: activeCharacter!.id,
+                    p_monster_name: targetName,
+                    p_period: period,
+                }),
+                supabase.rpc('get_monster_progression', {
+                    p_character_id: activeCharacter!.id,
+                    p_monster_name: targetName,
+                }),
+            ]);
 
-            if (error) console.error("Database Error:", error);
-            if (data) processAnalytics(data as DatabaseRow[]);
+            if (statsRes.error) console.error("Database Error:", statsRes.error);
+            if (progressionRes.error) console.error("Database Error:", progressionRes.error);
 
-            const { data: examineData } = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>eventType', 'MONSTER_EXAMINE')
-                .eq('log_data->>source', targetName)
-                .limit(1);
-
-            if (examineData && examineData.length > 0) {
-                const note = (examineData[0].log_data as any).note;
-                if (note) setExamineStats(parseMonsterExamine(note));
+            const stats = statsRes.data as MonsterStatsResult | null;
+            if (stats) {
+                setTotalKills(Number(stats.kill_count) || 0);
+                setAvgTtkSeconds(Number(stats.avg_ttk_seconds) || 0);
+                processDrops(stats.drops || []);
+                setAggregatedLocations((stats.locations || []).map(loc => ({
+                    regionId: String(loc.region_id),
+                    count: Number(loc.count)
+                })));
+                if (stats.examine_note) setExamineStats(parseMonsterExamine(stats.examine_note));
             }
+
+            setProgression((progressionRes.data as MonsterProgressionPoint[]) || []);
+
             setIsLoading(false);
         }
-        if (targetName !== "Unknown") fetchLogs();
-    }, [targetName]);
+
+        fetchLogs();
+    }, [targetName, activeCharacter, charLoading, period]);
 
     const grouped: Record<string, AggregatedDrop[]> = {};
     CATEGORY_ORDER.forEach(cat => grouped[cat] = []);
@@ -263,7 +226,6 @@ export default function IndividualMonsterPage() {
         <WikiLayout>
             <div className="w-full p-6 text-[14px]">
                 <Link href="/monsters" className="text-[#729fcf] hover:underline mb-2 block">{'<'} Back to Bestiary</Link>
-
                 <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-4 mb-8">
                     <div>
                         <h1 className="text-[32px] font-serif text-[#ffffff]">{displayTitle}</h1>
@@ -273,10 +235,7 @@ export default function IndividualMonsterPage() {
                         </div>
                     </div>
                     <div className="text-right">
-                        <button
-                            onClick={() => setIsIronman(!isIronman)}
-                            className="text-xs px-3 py-1 mb-2 bg-[#2a2a2a] border border-[#3a3a3a] hover:bg-[#3a3a3a] text-[#c8c8c8] transition-colors"
-                        >
+                        <button onClick={() => setIsIronman(!isIronman)} className="text-xs px-3 py-1 mb-2 bg-[#2a2a2a] border border-[#3a3a3a] hover:bg-[#3a3a3a] text-[#c8c8c8] transition-colors">
                             {isIronman ? 'Show GE Prices' : 'Show HA Prices'}
                         </button>
                         <p className="text-sm text-gray-400">Total Wealth</p>
@@ -311,7 +270,7 @@ export default function IndividualMonsterPage() {
                         </div>
 
                         <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4">Live Drop Tables</h2>
-                        {isLoading ? (
+                        {isLoading || charLoading ? (
                             <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">Crunching drop rates...</div>
                         ) : aggregatedDrops.length === 0 ? (
                             <div className="border border-[#3a3a3a] p-4 text-center text-gray-500 italic bg-[#1e1e1e]">No drops recorded.</div>
@@ -371,73 +330,37 @@ export default function IndividualMonsterPage() {
                                 );
                             })
                         )}
+
+                        <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-1 mb-4 mt-8">Weekly Progression</h2>
+                        <div className="mb-8">
+                            <MonsterProgressionChart data={progression} />
+                        </div>
                     </div>
 
-                    {/* WIKI INFOBOX - NOW WITH TTK & GP/HR */}
                     <div className="w-full lg:w-[320px] order-1 lg:order-2 shrink-0">
                         <table className="w-full border-collapse border border-[#3a3a3a] bg-[#1e1e1e] text-[13px]">
                             <tbody>
-                            <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">
-                                    {displayTitle}
-                                </th>
-                            </tr>
+                            <tr><th colSpan={4} className="bg-[#cca052] text-black text-[16px] p-2 border-b border-[#3a3a3a] text-center font-bold">{displayTitle}</th></tr>
                             <tr>
                                 <td colSpan={4} className="p-4 text-center border-b border-[#3a3a3a] bg-[#222222]">
                                     <div className="w-[150px] h-[150px] mx-auto flex items-center justify-center overflow-hidden">
-                                        <img
-                                            src={`https://oldschool.runescape.wiki/images/${displayTitle.replace(/ /g, '_')}.png`}
-                                            alt={displayTitle}
-                                            className="max-w-[130px] max-h-[130px] object-contain drop-shadow-md"
-                                            loading="lazy"
-                                            onError={(e) => {
-                                                e.currentTarget.style.display = 'none';
-                                                e.currentTarget.parentElement!.innerHTML = '<span class="text-gray-500 italic text-xs">Image Unavailable</span>';
-                                            }}
-                                        />
+                                        <img src={`https://oldschool.runescape.wiki/images/${displayTitle.replace(/ /g, '_')}.png`} alt={displayTitle}
+                                             className="max-w-[130px] max-h-[130px] object-contain drop-shadow-md" loading="lazy"
+                                             onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement!.innerHTML = '<span class="text-gray-500 italic text-xs">Image Unavailable</span>'; }} />
                                     </div>
                                 </td>
                             </tr>
-                            <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">
-                                    Combat Overview
-                                </th>
-                            </tr>
-                            <tr className="bg-[#1e1e1e]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Kills Logged</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{totalKills.toLocaleString()}</td>
-                            </tr>
-                            <tr className="bg-[#222222]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Average TTK</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{avgTtkSeconds > 0 ? `${avgTtkSeconds.toFixed(1)}s` : "-"}</td>
-                            </tr>
-                            <tr className="bg-[#1e1e1e]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Est. Kills / Hr</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{killsPerHour > 0 ? killsPerHour.toLocaleString() : "-"}</td>
-                            </tr>
-                            <tr className="bg-[#222222]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Avg GP / Kill</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#90ff90] font-bold">{gpPerKill.toLocaleString()}</td>
-                            </tr>
-                            <tr className="bg-[#1e1e1e]">
-                                <th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Est. GP / Hr</th>
-                                <td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#fbdb71] font-bold">{gpPerHour > 0 ? gpPerHour.toLocaleString() : "-"}</td>
-                            </tr>
-
-                            <tr>
-                                <th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold mt-4">
-                                    Base Combat Stats
-                                </th>
-                            </tr>
+                            <tr><th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold">Combat Overview</th></tr>
+                            <tr className="bg-[#1e1e1e]"><th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Kills Logged</th><td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{totalKills.toLocaleString()}</td></tr>
+                            <tr className="bg-[#222222]"><th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Average TTK</th><td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{avgTtkSeconds > 0 ? `${avgTtkSeconds.toFixed(1)}s` : "-"}</td></tr>
+                            <tr className="bg-[#1e1e1e]"><th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Est. Kills / Hr</th><td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#ffffff] font-bold">{killsPerHour > 0 ? killsPerHour.toLocaleString() : "-"}</td></tr>
+                            <tr className="bg-[#222222]"><th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Avg GP / Kill</th><td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#90ff90] font-bold">{gpPerKill.toLocaleString()}</td></tr>
+                            <tr className="bg-[#1e1e1e]"><th colSpan={2} className="p-2 border border-[#3a3a3a] text-left font-normal text-[#c8c8c8]">Est. GP / Hr</th><td colSpan={2} className="p-2 border border-[#3a3a3a] text-right text-[#fbdb71] font-bold">{gpPerHour > 0 ? gpPerHour.toLocaleString() : "-"}</td></tr>
+                            <tr><th colSpan={4} className="bg-[#cca052] text-black p-1 text-center border-y border-[#3a3a3a] font-bold mt-4">Base Combat Stats</th></tr>
                             {!examineStats ? (
-                                <tr>
-                                    <td colSpan={4} className="p-3 bg-[#1e1e1e] text-center text-gray-500 italic border-b border-[#3a3a3a]">
-                                        Cast Monster Inspect to populate.
-                                    </td>
-                                </tr>
+                                <tr><td colSpan={4} className="p-3 bg-[#1e1e1e] text-center text-gray-500 italic border-b border-[#3a3a3a]">Cast Monster Inspect to populate.</td></tr>
                             ) : (
                                 <>
-                                    {/* EXAMINE TABLE KEPT EXACTLY AS IT WAS */}
                                     <tr className="bg-[#1e1e1e]">
                                         <th className="p-1 px-2 border border-[#3a3a3a] text-left font-normal text-gray-400 text-xs w-1/4">Cmb Lvl</th>
                                         <td className="p-1 px-2 border border-[#3a3a3a] text-right font-bold text-white text-xs w-1/4">{examineStats.combat}</td>

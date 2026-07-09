@@ -5,27 +5,41 @@ import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
 import questList from '@/data/quests.json';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+interface QuestStateRow {
+    quest_name: string;
+    state: string;
+    qp_awarded: number;
+}
+
 export default function QuestsHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [questStates, setQuestStates] = useState<Record<string, string>>({});
     const [totalQP, setTotalQP] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     useEffect(() => {
+        setQuestStates({});
+        setTotalQP(0);
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchQuestProgress() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>category', 'Quests')
-                .order('id', {ascending: true});
+            const {data, error} = await supabase.rpc('get_quest_states', {
+                p_character_id: activeCharacter!.id,
+            });
 
             if (error) {
                 console.error(error);
@@ -35,37 +49,23 @@ export default function QuestsHub() {
 
             if (data) {
                 const states: Record<string, string> = {};
-                const qpMap = new Map<string, number>();
+                let qp = 0;
                 const validQuestNames = new Set(questList.map((q: any) => q.name));
 
-                data.forEach(row => {
-                    const log = row.log_data as any;
-                    const source = log.source;
-
-                    if (!source || !validQuestNames.has(source)) return;
-
-                    if (log.eventType === 'QUEST_PROGRESS' && log.target) {
-                        states[source] = log.target;
-                    }
-
-                    if (log.eventType === 'DIALOGUE_REWARD' && log.items) {
-                        log.items.forEach((item: any) => {
-                            if (item.name === "Quest point") {
-                                qpMap.set(source, item.qty);
-                                states[source] = "FINISHED";
-                            }
-                        });
-                    }
+                (data as QuestStateRow[]).forEach(row => {
+                    if (!row.quest_name || !validQuestNames.has(row.quest_name)) return;
+                    if (row.state) states[row.quest_name] = row.state;
+                    qp += Number(row.qp_awarded) || 0;
                 });
 
                 setQuestStates(states);
-                setTotalQP(Array.from(qpMap.values()).reduce((a, b) => a + b, 0));
+                setTotalQP(qp);
             }
             setIsLoading(false);
         }
 
         fetchQuestProgress();
-    }, []);
+    }, [activeCharacter, charLoading]);
 
     const f2pQuests = questList.filter(q => q.type === "F2P");
 

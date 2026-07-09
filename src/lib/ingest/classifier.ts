@@ -20,6 +20,7 @@ import type {
     ShopStockPayload,
     ExamineTextPayload,
     QuestStatePayload,
+    StatsSnapshotPayload,
     ClassifiedEvent,
     ClassifiedItem,
     CombinedSnapshot,
@@ -207,6 +208,8 @@ export class SessionClassifier {
                 return this.processTick(event, event.payload as TickPayload);
             case 'BANK_SNAPSHOT':
                 return this.processBankSnapshot(event, event.payload as BankSnapshotPayload);
+            case 'STATS_SNAPSHOT':
+                return this.processStatsSnapshot(event, event.payload as StatsSnapshotPayload);
             default:
                 return [];
         }
@@ -272,11 +275,16 @@ export class SessionClassifier {
         if (xpDelta <= 0) return [];
 
         const isCombat = COMBAT_SKILLS.has(skill);
-        const category = isCombat ? 'Combat' : 'Skilling';
+        const w = this.state.lastWidgets;
+        const isQuestReward = w?.dialogue277;
+
+        const category = isQuestReward ? 'Quests' : (isCombat ? 'Combat' : 'Skilling');
 
         let source: string;
 
-        if (isCombat) {
+        if (isQuestReward) {
+            source = this.state.lastFinishedQuest || 'Quest Reward';
+        } else if (isCombat) {
             source = this.state.lockedCombatTarget || 'Enemy';
             if (skill === 'Magic') {
                 if (this.state.lockedManualSpell) {
@@ -290,20 +298,16 @@ export class SessionClassifier {
         } else {
             source = this.state.lockedSkillingTarget || 'Unknown';
             if (!source || source === 'Unknown' || source === '') {
-                // Fallback chain (port of onStatChanged L396–405)
                 const w = this.state.lastWidgets;
-                if (w?.dialogue277) {
-                    source = 'Quest Reward';
-                } else if (w?.dialogue193) {
+                if (w?.dialogue193) {
                     source = 'XP Lamp / Reward';
                 } else if (this.state.lastNetLost.length > 0) {
                     source = this.state.lastNetLost[0].item.name;
                 } else if (this.state.lastNetGained.length > 0) {
                     const itemName = this.state.lastNetGained[0].item.name.toLowerCase();
-                    source =
-                        itemName.includes('key') || itemName.includes('bone')
-                            ? 'Activity'
-                            : this.state.lastNetGained[0].item.name;
+                    source = itemName.includes('key') || itemName.includes('bone')
+                        ? 'Activity'
+                        : this.state.lastNetGained[0].item.name;
                 } else {
                     source = 'Activity';
                 }
@@ -561,6 +565,27 @@ export class SessionClassifier {
     }
 
     // -------------------------------------------------------------------------
+    // STATS_SNAPSHOT — pass-through; no session state involved
+    // -------------------------------------------------------------------------
+
+    private processStatsSnapshot(event: RawEvent, p: StatsSnapshotPayload): ClassifiedEvent[] {
+        return [
+            this.makeEvent(event, {
+                eventType: 'STATS_SNAPSHOT',
+                category: 'System',
+                source: 'Player',
+                target: 'None',
+                stats: {
+                    skillLevels: p.skillLevels,
+                    totalLevel: p.totalLevel,
+                    combatLevel: p.combatLevel,
+                },
+                note: '',
+            }),
+        ];
+    }
+
+    // -------------------------------------------------------------------------
     // Net-Diff sub-classifiers
     // -------------------------------------------------------------------------
 
@@ -652,9 +677,7 @@ export class SessionClassifier {
         }
 
         if (wasDialogueRecently) {
-            const isQuestReward =
-                tick.widgets.dialogue277 ||
-                (!!this.state.lastFinishedQuest && this.state.lastFinishedQuest !== 'Quest Reward');
+            const isQuestReward = tick.widgets.dialogue277;
             const category = isQuestReward ? 'Quests' : 'NPC Interaction';
             const source = isQuestReward
                 ? this.state.lastFinishedQuest || 'Quest Reward'

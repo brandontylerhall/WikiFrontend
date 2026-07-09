@@ -3,24 +3,13 @@
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
-import {LEGACY_ID_MAP} from '@/lib/constants';
 import {categorizeItem, CATEGORY_ORDER, getBankSubCategory, SUB_CATEGORY_ORDER} from '@/lib/utils';
 import WikiLayout from "@/components/WikiLayout";
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseKey);
-
-interface BankItemTracking {
-    name: string;
-    snapshotBase: number;
-    deposits: number;
-    withdrawals: number;
-    unitGe: number;
-    unitHa: number;
-    foundSnapshot: boolean;
-}
 
 interface ProcessedItem {
     name: string;
@@ -29,95 +18,61 @@ interface ProcessedItem {
     unitHa: number;
 }
 
+interface BankRow {
+    name: string;
+    qty: number;
+    ge_unit: number;
+    ha_unit: number;
+}
+
 export default function BankHub() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [categories, setCategories] = useState<Record<string, Record<string, ProcessedItem[]>>>({});
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
+        setCategories({});
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchBankItems() {
             setIsLoading(true);
-            const {data} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .order('id', {ascending: false})
-                .limit(5000);
+            const {data, error} = await supabase.rpc('get_bank_snapshot', {
+                p_character_id: activeCharacter!.id,
+            });
+
+            if (error) console.error("Database Error:", error);
 
             if (data) {
-                const itemMap: Record<string, BankItemTracking> = {};
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log) return;
-
-                    if (log.items) {
-                        log.items.forEach((item: LogItem) => {
-                            const name = (item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`).trim();
-
-                            if (!itemMap[name]) {
-                                itemMap[name] = {
-                                    name,
-                                    snapshotBase: 0,
-                                    deposits: 0,
-                                    withdrawals: 0,
-                                    unitGe: 0,
-                                    unitHa: 0,
-                                    foundSnapshot: false
-                                };
-                            }
-
-                            const itemGE = item.GE || 0;
-                            const itemHA = item.HA || 0;
-                            if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
-                            if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
-
-                            const action = (log.action || log.eventType || "").toUpperCase();
-
-                            if (action === 'BANK_SNAPSHOT') {
-                                if (!itemMap[name].foundSnapshot) {
-                                    itemMap[name].snapshotBase = item.qty;
-                                    itemMap[name].foundSnapshot = true;
-                                }
-                            } else if (action === 'BANK_DEPOSIT') {
-                                if (!itemMap[name].foundSnapshot) itemMap[name].deposits += item.qty;
-                            } else if (action === 'BANK_WITHDRAWAL') {
-                                if (!itemMap[name].foundSnapshot) itemMap[name].withdrawals += item.qty;
-                            }
-                        });
-                    }
-                });
-
                 const categorized: Record<string, Record<string, ProcessedItem[]>> = {};
 
-                Object.values(itemMap).forEach(info => {
-                    if (info.name === "Coins" && info.unitGe === 0) {
-                        info.unitGe = 1;
-                        info.unitHa = 1;
+                (data as BankRow[]).forEach(row => {
+                    const finalQty = Number(row.qty);
+                    if (finalQty <= 0) return;
+
+                    const catName = categorizeItem(row.name);
+                    const subCatName = getBankSubCategory(row.name, catName);
+
+                    // Ignore Bank Fillers!
+                    if (catName === "Hidden" || subCatName === "Hidden") return;
+
+                    if (!categorized[catName]) {
+                        categorized[catName] = {};
+                    }
+                    if (!categorized[catName][subCatName]) {
+                        categorized[catName][subCatName] = [];
                     }
 
-                    const finalQty = info.snapshotBase + info.deposits - info.withdrawals;
-
-                    if (finalQty > 0) {
-                        const catName = categorizeItem(info.name);
-                        const subCatName = getBankSubCategory(info.name, catName);
-
-                        // Ignore Bank Fillers!
-                        if (catName === "Hidden" || subCatName === "Hidden") return;
-
-                        if (!categorized[catName]) {
-                            categorized[catName] = {};
-                        }
-                        if (!categorized[catName][subCatName]) {
-                            categorized[catName][subCatName] = [];
-                        }
-
-                        categorized[catName][subCatName].push({
-                            name: info.name,
-                            qty: finalQty,
-                            unitGe: info.unitGe,
-                            unitHa: info.unitHa
-                        });
-                    }
+                    categorized[catName][subCatName].push({
+                        name: row.name,
+                        qty: finalQty,
+                        unitGe: Number(row.ge_unit),
+                        unitHa: Number(row.ha_unit)
+                    });
                 });
 
                 setCategories(categorized);
@@ -126,7 +81,7 @@ export default function BankHub() {
         }
 
         fetchBankItems();
-    }, []);
+    }, [activeCharacter, charLoading]);
 
     let exactTotalWealth = 0;
     Object.values(categories).forEach(subCats => {

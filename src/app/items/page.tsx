@@ -3,11 +3,11 @@
 import React, {useEffect, useState} from 'react';
 import {createClient} from '@supabase/supabase-js';
 import Link from 'next/link';
-import {LEGACY_ID_MAP} from '@/lib/constants';
 import {categorizeItem, CATEGORY_ORDER} from '@/lib/utils';
 import regionData from '@/data/regions.json';
 import WikiLayout from "@/components/WikiLayout";
-import { DatabaseRow, LogItem } from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
+import { usePeriod } from '@/lib/PeriodContext';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -23,77 +23,54 @@ interface ProcessedItem {
     origins: Set<string>;
 }
 
-// --- OPTIMIZATION CONSTANTS ---
-const ALLOWED_ITEM_ACTIONS = new Set(['', 'GATHER_GAIN', 'NPC_DROP']);
-const IGNORED_SOURCES = new Set(["none", "pickup", "unknown/pickup", "bank", "unknown"]);
+interface ItemLogRow {
+    name: string;
+    qty: number;
+    ge_unit: number;
+    ha_unit: number;
+    origins: string[] | null;
+}
+
+const mapOrigin = (o: string) =>
+    o.startsWith('region:') ? (regionDictionary[o.slice(7)] || `Region ${o.slice(7)}`) : o;
 
 export default function ItemsPage() {
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
+    const { period } = usePeriod();
     const [categories, setCategories] = useState<Record<string, ProcessedItem[]>>({});
     const [isIronman, setIsIronman] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
+        setCategories({});
+        if (charLoading) return;
+        if (!activeCharacter) {
+            setIsLoading(false);
+            return;
+        }
+
         async function fetchItems() {
             setIsLoading(true);
-            const {data} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .order('id', {ascending: false})
-                .limit(5000);
+            const {data, error} = await supabase.rpc('get_item_log', {
+                p_character_id: activeCharacter!.id,
+                p_period: period,
+            });
+
+            if (error) console.error("Database Error:", error);
 
             if (data) {
-                const itemMap: Record<string, ProcessedItem> = {};
-
-                data.forEach((row: DatabaseRow) => {
-                    const log = row.log_data;
-                    if (!log || !log.items) return;
-
-                    const category = log.category || "Unknown";
-                    const source = log.source || "";
-                    const regionId = log.regionId;
-
-                    const evt = (log.eventType || log.action || "").toUpperCase();
-                    const isAllowedAction = ALLOWED_ITEM_ACTIONS.has(evt);
-
-                    log.items.forEach((item: LogItem) => {
-                        const name = item.name || LEGACY_ID_MAP[item.id] || `Unknown (ID: ${item.id})`;
-
-                        if (!itemMap[name]) {
-                            itemMap[name] = {name, qty: 0, unitGe: 0, unitHa: 0, origins: new Set()};
-                        }
-
-                        const itemGE = item.GE || 0;
-                        const itemHA = item.HA || 0;
-
-                        if (itemMap[name].unitGe === 0 && itemGE > 0) itemMap[name].unitGe = itemGE / item.qty;
-                        if (itemMap[name].unitHa === 0 && itemHA > 0) itemMap[name].unitHa = itemHA / item.qty;
-
-                        if (isAllowedAction) {
-                            itemMap[name].qty += item.qty;
-
-                            if (category === 'Combat' || evt === 'NPC_DROP') {
-                                if (source && !IGNORED_SOURCES.has(source.toLowerCase())) {
-                                    itemMap[name].origins.add(source);
-                                }
-                            } else {
-                                if (regionId) {
-                                    const regionName = regionDictionary[String(regionId)];
-                                    itemMap[name].origins.add(regionName || `Region ${regionId}`);
-                                }
-                            }
-                        }
-                    });
-                });
-
                 const categorized: Record<string, ProcessedItem[]> = {};
 
-                Object.values(itemMap).forEach(item => {
-                    if (item.qty <= 0) return;
+                (data as ItemLogRow[]).forEach(row => {
+                    const item: ProcessedItem = {
+                        name: row.name,
+                        qty: Number(row.qty),
+                        unitGe: Number(row.ge_unit),
+                        unitHa: Number(row.ha_unit),
+                        origins: new Set((row.origins ?? []).map(mapOrigin)),
+                    };
 
-                    if (item.name === "Coins" && item.unitGe === 0) {
-                        item.unitGe = 1;
-                        item.unitHa = 1;
-                    }
+                    if (item.qty <= 0) return;
 
                     const catName = categorizeItem(item.name);
 
@@ -109,7 +86,7 @@ export default function ItemsPage() {
         }
 
         fetchItems();
-    }, []);
+    }, [activeCharacter, charLoading, period]);
 
     let totalWealth = 0;
     Object.values(categories).flat().forEach(item => {

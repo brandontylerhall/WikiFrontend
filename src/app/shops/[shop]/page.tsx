@@ -6,7 +6,7 @@ import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
 import regionData from '@/data/regions.json';
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const regionDictionary: Record<string, string> = regionData;
 
@@ -14,10 +14,6 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
-
-const STANDARD_SHOP_QTYS = new Set([
-    0, 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 75, 80, 100, 150, 200, 250, 300, 400, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000, 10000
-]);
 
 interface ShopItem {
     name: string;
@@ -30,27 +26,16 @@ interface StockItem {
     name: string;
     qty: number;
     storeBasePrice: number;
-    presenceScore: number;
     isLikelyJunk: boolean;
-    sortIndex: number;
 }
 
-// Strictly Typed snapshot merger
-function mergeSnapshotItems(itemsArray: (LogItem & { sortIndex?: number })[][]) {
-    const mergedMap = new Map<string, LogItem & { sortIndex?: number }>();
-    itemsArray.forEach(items => {
-        items.forEach((item, index) => {
-            const name = item.name || 'Unknown';
-            if (!mergedMap.has(name)) {
-                mergedMap.set(name, { ...item, sortIndex: index });
-            } else {
-                const existing = mergedMap.get(name)!;
-                if (item.qty > existing.qty) existing.qty = item.qty;
-                existing.sortIndex = Math.min(existing.sortIndex ?? index, index);
-            }
-        });
-    });
-    return Array.from(mergedMap.values());
+interface ShopDetailResult {
+    region_id: number | null;
+    total_spent: number;
+    total_earned: number;
+    stock: { name: string; qty: number; base_price: number; is_player_sold: boolean }[];
+    purchases: { name: string; qty: number; total_cost: number }[];
+    sales: { name: string; qty: number; total_revenue: number }[];
 }
 
 const formatAvg = (currency: number, qty: number) => {
@@ -61,6 +46,7 @@ const formatAvg = (currency: number, qty: number) => {
 
 export default function IndividualShopPage() {
     const params = useParams();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const rawShop = typeof params?.shop === 'string' ? params.shop : '';
     const shopName = decodeURIComponent(rawShop).replace(/_/g, ' ');
 
@@ -72,19 +58,26 @@ export default function IndividualShopPage() {
     const [totalEarned, setTotalEarned] = useState(0);
     const [shopRegion, setShopRegion] = useState<string>("Unknown Location");
 
-    const [cleanStock, setCleanStock] = useState(true);
-
     useEffect(() => {
+        setShopStock([]);
+        setBoughtItems([]);
+        setSoldItems([]);
+        setTotalSpent(0);
+        setTotalEarned(0);
+        setShopRegion("Unknown Location");
+
+        if (charLoading || !activeCharacter) {
+            if (!charLoading) setIsLoading(false);
+            return;
+        }
+
         async function fetchShopData() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .eq('log_data->>category', 'Shopping')
-                .ilike('log_data->>source', shopName)
-                .order('id', {ascending: false})
-                .limit(5000);
+            const {data, error} = await supabase.rpc('get_shop_detail', {
+                p_character_id: activeCharacter!.id,
+                p_shop_name: shopName,
+            });
 
             if (error) {
                 console.error(error);
@@ -92,151 +85,39 @@ export default function IndividualShopPage() {
                 return;
             }
 
-            const transactions: Record<string, { bought: LogItem[], sold: LogItem[], spent: LogItem[], received: LogItem[] }> = {};
-            const rawSnapshots: { ts: number, items: LogItem[] }[] = [];
-            let latestRegion = "Unknown Location";
-
-            data?.forEach((row: DatabaseRow) => {
-                const log = row.log_data;
-                if (!log) return;
-
-                const ts = log.timestamp ? new Date(log.timestamp).getTime() : 0;
-                const action = (log.eventType || "").toUpperCase();
-
-                if (log.regionId) latestRegion = regionDictionary[String(log.regionId)] || `Region ${log.regionId}`;
-
-                if (action === 'SHOP_SNAPSHOT') {
-                    if (log.items && log.items.length > 0) {
-                        rawSnapshots.push({ts, items: log.items});
-                    }
-                }
-
-                if (!transactions[ts]) transactions[ts] = {bought: [], sold: [], spent: [], received: []};
-
-                if (action === 'SHOP_BUY') transactions[ts].bought.push(...(log.items || []));
-                if (action === 'SHOP_SELL') transactions[ts].sold.push(...(log.items || []));
-                if (action === 'SHOP_SPEND') transactions[ts].spent.push(...(log.items || []));
-                if (action === 'SHOP_RECEIVE') transactions[ts].received.push(...(log.items || []));
-
-                if (action === 'SHOP_TRANSACTION') {
-                    const gained = log.items || [];
-                    let lostQty = 0;
-                    let lostName = "Unknown";
-
-                    if (log.note && log.note.includes("Spent:")) {
-                        const match = log.note.match(/Spent:\s*(\d+)x\s*(.*)/);
-                        if (match) {
-                            lostQty = parseInt(match[1], 10);
-                            lostName = match[2] ? match[2].trim() : "Coins";
-                        }
-                    }
-
-                    const isSelling = gained.some((i: LogItem) => i.name === "Coins");
-
-                    if (isSelling) {
-                        transactions[ts].received.push(...gained);
-                        if (lostQty > 0) transactions[ts].sold.push({id: 0, name: lostName, qty: lostQty});
-                    } else {
-                        transactions[ts].bought.push(...gained);
-                        if (lostQty > 0) transactions[ts].spent.push({id: 0, name: lostName, qty: lostQty});
-                    }
-                }
-            });
-
-            rawSnapshots.sort((a, b) => a.ts - b.ts);
-            const distinctVisits: LogItem[][] = [];
-            let currentGroup: LogItem[][] = [];
-            let groupStartTime = 0;
-
-            rawSnapshots.forEach(snap => {
-                if (groupStartTime === 0 || snap.ts - groupStartTime > 1000 * 60 * 60 * 2) {
-                    if (currentGroup.length > 0) distinctVisits.push(mergeSnapshotItems(currentGroup));
-                    currentGroup = [snap.items];
-                    groupStartTime = snap.ts;
-                } else {
-                    currentGroup.push(snap.items);
-                }
-            });
-            if (currentGroup.length > 0) distinctVisits.push(mergeSnapshotItems(currentGroup));
-
-            const totalVisits = distinctVisits.length;
-            const itemPresence: Record<string, { presenceCount: number, maxQty: number, exactBasePrice: number, sortIndex: number }> = {};
-
-            distinctVisits.forEach(visitItems => {
-                visitItems.forEach((item: LogItem & { sortIndex?: number }, index: number) => {
-                    const itemName = item.name || 'Unknown';
-                    if (!itemPresence[itemName]) {
-                        itemPresence[itemName] = {
-                            presenceCount: 0,
-                            maxQty: 0,
-                            exactBasePrice: item.basePrice ? (item.basePrice / item.qty) : Math.max(1, Math.round(((item.HA || 0) / item.qty) / 0.6)),
-                            sortIndex: item.sortIndex !== undefined ? item.sortIndex : index
-                        };
-                    } else {
-                        itemPresence[itemName].sortIndex = Math.min(itemPresence[itemName].sortIndex, item.sortIndex !== undefined ? item.sortIndex : index);
-                    }
-
-                    itemPresence[itemName].presenceCount += 1;
-                    if (item.qty > itemPresence[itemName].maxQty) {
-                        itemPresence[itemName].maxQty = item.qty;
-                    }
-                });
-            });
-
-            const capturedStock = Object.entries(itemPresence)
-                .map(([name, data]) => {
-                    const presenceScore = Math.round((data.presenceCount / totalVisits) * 100);
-                    let isLikelyJunk = false;
-                    if (totalVisits > 1 && presenceScore < 100) isLikelyJunk = true;
-                    else if (totalVisits === 1 && !STANDARD_SHOP_QTYS.has(data.maxQty)) isLikelyJunk = true;
-
-                    return { name, qty: data.maxQty, storeBasePrice: data.exactBasePrice, presenceScore, isLikelyJunk, sortIndex: data.sortIndex };
-                })
-                .sort((a, b) => a.sortIndex - b.sortIndex);
-
-            const boughtMap = new Map<string, ShopItem>();
-            const soldMap = new Map<string, ShopItem>();
-            let spentTally = 0;
-            let earnedTally = 0;
-
-            Object.values(transactions).forEach(tx => {
-                if (tx.bought.length > 0 && tx.spent.length > 0) {
-                    const item = tx.bought[0];
-                    const currency = tx.spent[0];
-                    const itemName = item.name || "Unknown";
-                    if (!boughtMap.has(itemName)) boughtMap.set(itemName, { name: itemName, totalQty: 0, totalCurrency: 0, currencyName: currency.name || "Unknown" });
-
-                    const stat = boughtMap.get(itemName)!;
-                    stat.totalQty += item.qty;
-                    stat.totalCurrency += currency.qty;
-                    spentTally += currency.qty;
-                }
-                if (tx.sold.length > 0 && tx.received.length > 0) {
-                    const item = tx.sold[0];
-                    const currency = tx.received[0];
-                    const itemName = item.name || "Unknown";
-                    if (!soldMap.has(itemName)) soldMap.set(itemName, { name: itemName, totalQty: 0, totalCurrency: 0, currencyName: currency.name || "Unknown" });
-
-                    const stat = soldMap.get(itemName)!;
-                    stat.totalQty += item.qty;
-                    stat.totalCurrency += currency.qty;
-                    earnedTally += currency.qty;
-                }
-            });
-
-            setShopStock(capturedStock);
-            setBoughtItems(Array.from(boughtMap.values()).sort((a, b) => b.totalQty - a.totalQty));
-            setSoldItems(Array.from(soldMap.values()).sort((a, b) => b.totalCurrency - a.totalCurrency));
-            setTotalSpent(spentTally);
-            setTotalEarned(earnedTally);
-            setShopRegion(latestRegion);
+            const detail = data as ShopDetailResult | null;
+            if (detail) {
+                setShopStock((detail.stock || []).map(s => ({
+                    name: s.name,
+                    qty: Number(s.qty),
+                    storeBasePrice: Number(s.base_price),
+                    isLikelyJunk: !!s.is_player_sold,
+                })));
+                setBoughtItems((detail.purchases || []).map(p => ({
+                    name: p.name,
+                    totalQty: Number(p.qty),
+                    totalCurrency: Number(p.total_cost),
+                    currencyName: "Coins",
+                })));
+                setSoldItems((detail.sales || []).map(s => ({
+                    name: s.name,
+                    totalQty: Number(s.qty),
+                    totalCurrency: Number(s.total_revenue),
+                    currencyName: "Coins",
+                })));
+                setTotalSpent(Number(detail.total_spent) || 0);
+                setTotalEarned(Number(detail.total_earned) || 0);
+                setShopRegion(detail.region_id
+                    ? (regionDictionary[String(detail.region_id)] || `Region ${detail.region_id}`)
+                    : "Unknown Location");
+            }
             setIsLoading(false);
         }
 
         if (shopName) fetchShopData();
-    }, [shopName]);
+    }, [shopName, activeCharacter, charLoading]);
 
-    const displayedStock = cleanStock ? shopStock.filter(item => !item.isLikelyJunk) : shopStock;
+    const displayedStock = shopStock;
 
     return (
         <WikiLayout>
@@ -335,14 +216,6 @@ export default function IndividualShopPage() {
                         {/* Inventory moved to bottom */}
                         <div className="flex justify-between items-end border-b border-[#3a3a3a] pb-2 mb-4">
                             <h2 className="text-[22px] font-serif text-[#ffffff]">Observed Base Stock</h2>
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={() => setCleanStock(!cleanStock)}
-                                    className={`text-xs px-2 py-1 border transition-colors ${cleanStock ? 'bg-[#cca052] text-black border-[#cca052]' : 'bg-[#2a2a2a] text-[#c8c8c8] border-[#3a3a3a] hover:bg-[#3a3a3a]'}`}
-                                >
-                                    {cleanStock ? 'Junk Filter: ON' : 'Junk Filter: OFF'}
-                                </button>
-                            </div>
                         </div>
 
                         <div className="overflow-x-auto mb-10">

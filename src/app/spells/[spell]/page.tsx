@@ -5,7 +5,7 @@ import {createClient} from '@supabase/supabase-js';
 import {useParams} from 'next/navigation';
 import Link from 'next/link';
 import WikiLayout from '@/components/WikiLayout';
-import {DatabaseRow, LogItem} from '@/lib/types';
+import { useCharacter } from '@/lib/CharacterContext';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,34 +41,17 @@ interface RunePricing {
     ha: number;
 }
 
+interface SpellDetailResult {
+    total_casts: number;
+    total_xp: number;
+    runes: { name: string; qty: number; ge_unit: number; ha_unit: number }[];
+    examined_monsters: { name: string; count: number }[];
+}
+
 // ============================================================================
 // CUSTOM MODULE: MONSTER EXAMINE / INSPECT
 // ============================================================================
-function MonsterExamineModule() {
-    const [monsters, setMonsters] = useState<Record<string, number>>({});
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        async function fetchExamines() {
-            const {data} = await supabase
-                .from('loot_logs')
-                .select('log_data->>source')
-                .or('log_data->>eventType.eq.MONSTER_EXAMINE,log_data->>action.eq.MONSTER_EXAMINE')
-                .limit(5000);
-
-            if (data) {
-                const map: Record<string, number> = {};
-                data.forEach((row: any) => {
-                    const src = row.source;
-                    if (src) map[src] = (map[src] || 0) + 1;
-                });
-                setMonsters(map);
-            }
-            setIsLoading(false);
-        }
-        fetchExamines();
-    }, []);
-
+function MonsterExamineModule({ monsters, isLoading }: { monsters: Record<string, number>, isLoading: boolean }) {
     return (
         <div className="mt-8 border-t border-[#3a3a3a] pt-8">
             <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Inspected Bestiary</h2>
@@ -109,6 +92,7 @@ function AlchemyModule({ spellName }: { spellName: string }) {
 // ============================================================================
 export default function IndividualSpellPage() {
     const params = useParams();
+    const { activeCharacter, isLoading: charLoading } = useCharacter();
     const rawSpell = typeof params?.spell === 'string' ? params.spell : '';
     const spellName = rawSpell.replace(/_/g, ' ');
 
@@ -118,17 +102,27 @@ export default function IndividualSpellPage() {
     const [totalXp, setTotalXp] = useState(0);
     const [actualRunesUsed, setActualRunesUsed] = useState<Record<string, number>>({});
     const [runePrices, setRunePrices] = useState<Record<string, RunePricing>>({});
+    const [examinedMonsters, setExaminedMonsters] = useState<Record<string, number>>({});
 
     useEffect(() => {
+        setTotalCasts(0);
+        setTotalXp(0);
+        setActualRunesUsed({});
+        setRunePrices({});
+        setExaminedMonsters({});
+
+        if (charLoading || !activeCharacter) {
+            if (!charLoading) setIsLoading(false);
+            return;
+        }
+
         async function fetchSpellData() {
             setIsLoading(true);
 
-            const {data, error} = await supabase
-                .from('loot_logs')
-                .select('log_data')
-                .or(`log_data->>eventType.eq.SPELL_CAST,log_data->>skill.eq.Magic,log_data->>source.ilike.%${spellName}%`)
-                .order('id', {ascending: false})
-                .limit(15000);
+            const {data, error} = await supabase.rpc('get_spell_detail', {
+                p_character_id: activeCharacter!.id,
+                p_spell_name: spellName,
+            });
 
             if (error) {
                 console.error(error);
@@ -136,84 +130,31 @@ export default function IndividualSpellPage() {
                 return;
             }
 
-            let xp = 0;
-            const uniqueCasts = new Set<number>();
-            const runes: Record<string, number> = {};
-            const prices: Record<string, RunePricing> = {};
-            const magicXpEvents: { time: number, spell: string }[] = [];
+            const detail = data as SpellDetailResult | null;
+            if (detail) {
+                const runes: Record<string, number> = {};
+                const prices: Record<string, RunePricing> = {};
+                (detail.runes || []).forEach(r => {
+                    runes[r.name] = Number(r.qty);
+                    prices[r.name] = { name: r.name, ge: Number(r.ge_unit), ha: Number(r.ha_unit) };
+                });
 
-            data?.forEach((row: DatabaseRow) => {
-                const log = row.log_data;
-                if (!log) return;
+                const examines: Record<string, number> = {};
+                (detail.examined_monsters || []).forEach(m => {
+                    if (m.name) examines[m.name] = Number(m.count);
+                });
 
-                if (log.eventType === 'XP_GAIN' && log.skill === 'Magic') {
-                    let rawSource = log.source;
-                    if (rawSource && rawSource !== 'Unknown' && rawSource !== 'Activity') {
-                        if (rawSource.includes("->")) rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                        if (log.timestamp) {
-                            magicXpEvents.push({ time: new Date(log.timestamp).getTime(), spell: rawSource });
-                        }
-                    }
-                }
-            });
-
-            data?.forEach((row: DatabaseRow) => {
-                const log = row.log_data;
-                if (!log) return;
-
-                const action = (log.eventType || log.action || "").toUpperCase();
-                const logTime = log.timestamp ? new Date(log.timestamp).getTime() : 0;
-                const tickId = Math.floor(logTime / 600);
-
-                if (action === "XP_GAIN" && log.skill === "Magic") {
-                    let rawSource = log.source;
-                    if (rawSource && rawSource !== 'Unknown' && rawSource !== 'Activity') {
-                        if (rawSource.includes("->")) rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                        if (rawSource === spellName) {
-                            xp += (log.xpGained || 0);
-                            uniqueCasts.add(tickId);
-                        }
-                    }
-                }
-
-                if (action === "SPELL_CAST" || action === "MONSTER_EXAMINE") {
-                    let rawSource = log.source || "Generic Magic";
-                    const matchingXpEvent = magicXpEvents.find(e => Math.abs(e.time - logTime) < 600);
-
-                    if (action === "MONSTER_EXAMINE") {
-                        rawSource = "Monster Examine";
-                    } else if (matchingXpEvent) {
-                        rawSource = matchingXpEvent.spell;
-                    } else if (rawSource.includes("->")) {
-                        rawSource = rawSource.split("->").pop()?.trim() || rawSource;
-                    }
-
-                    if (rawSource === spellName || (spellName === "Monster Inspect" && rawSource === "Monster Examine")) {
-                        uniqueCasts.add(tickId);
-
-                        log.items?.forEach((item: LogItem) => {
-                            const name = item.name;
-                            if (!name) return;
-
-                            runes[name] = (runes[name] || 0) + item.qty;
-
-                            if (!prices[name]) prices[name] = { name, ge: 0, ha: 0 };
-                            if (item.GE && prices[name].ge === 0) prices[name].ge = item.GE / item.qty;
-                            if (item.HA && prices[name].ha === 0) prices[name].ha = item.HA / item.qty;
-                        });
-                    }
-                }
-            });
-
-            setTotalCasts(uniqueCasts.size);
-            setTotalXp(xp);
-            setActualRunesUsed(runes);
-            setRunePrices(prices);
+                setTotalCasts(Number(detail.total_casts) || 0);
+                setTotalXp(Number(detail.total_xp) || 0);
+                setActualRunesUsed(runes);
+                setRunePrices(prices);
+                setExaminedMonsters(examines);
+            }
             setIsLoading(false);
         }
 
         if (spellName) fetchSpellData();
-    }, [spellName]);
+    }, [spellName, activeCharacter, charLoading]);
 
     const avgXpPerCast = totalCasts > 0 ? (totalXp / totalCasts) : 0;
 
@@ -345,7 +286,7 @@ export default function IndividualSpellPage() {
                         </div>
 
                         {/* --- CUSTOM MODULE INJECTIONS --- */}
-                        {(spellName === "Monster Examine" || spellName === "Monster Inspect") && <MonsterExamineModule />}
+                        {(spellName === "Monster Examine" || spellName === "Monster Inspect") && <MonsterExamineModule monsters={examinedMonsters} isLoading={isLoading} />}
                         {spellName.includes("Alchemy") && <AlchemyModule spellName={spellName} />}
 
                     </div>

@@ -67,6 +67,12 @@ export interface QuestStatePayload {
     newState: 'NOT_STARTED' | 'IN_PROGRESS' | 'FINISHED';
 }
 
+export interface StatsSnapshotPayload {
+    skillLevels: Record<string, number>; // skill name → real (unboosted) level
+    totalLevel: number;
+    combatLevel: number;
+}
+
 export type RawEventType =
     | 'TICK'
     | 'MENU_CLICK'
@@ -75,7 +81,8 @@ export type RawEventType =
     | 'SHOP_STOCK'
     | 'BANK_SNAPSHOT'
     | 'EXAMINE_TEXT'
-    | 'QUEST_STATE';
+    | 'QUEST_STATE'
+    | 'STATS_SNAPSHOT';
 
 export interface RawEvent {
     schemaVersion?: string;
@@ -126,6 +133,7 @@ export interface ClassifiedEvent {
     hpHealed?: number;
     npcLevel?: number;
     items?: ClassifiedItem[];
+    stats?: StatsSnapshotPayload; // present on STATS_SNAPSHOT rows only
 }
 
 // ---------------------------------------------------------------------------
