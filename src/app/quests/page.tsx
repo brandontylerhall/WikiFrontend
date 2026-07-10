@@ -21,12 +21,16 @@ interface QuestStateRow {
 export default function QuestsHub() {
     const { activeCharacter, isLoading: charLoading } = useCharacter();
     const [questStates, setQuestStates] = useState<Record<string, string>>({});
+    const [memberQuests, setMemberQuests] = useState<{ name: string, state: string }[]>([]);
+    const [everMember, setEverMember] = useState(false);
     const [totalQP, setTotalQP] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     useEffect(() => {
         setQuestStates({});
+        setMemberQuests([]);
+        setEverMember(false);
         setTotalQP(0);
         if (charLoading) return;
         if (!activeCharacter) {
@@ -37,30 +41,38 @@ export default function QuestsHub() {
         async function fetchQuestProgress() {
             setIsLoading(true);
 
-            const {data, error} = await supabase.rpc('get_quest_states', {
-                p_character_id: activeCharacter!.id,
-            });
+            const [statesRes, qpRes, memberRes] = await Promise.all([
+                supabase.rpc('get_quest_states', { p_character_id: activeCharacter!.id }),
+                supabase.rpc('get_quest_points', { p_character_id: activeCharacter!.id }),
+                supabase.rpc('get_membership_status', { p_character_id: activeCharacter!.id }),
+            ]);
 
-            if (error) {
-                console.error(error);
-                setIsLoading(false);
-                return;
-            }
+            if (statesRes.error) console.error(statesRes.error);
+            if (qpRes.error) console.error(qpRes.error);
+            if (memberRes.error) console.error(memberRes.error);
 
-            if (data) {
+            if (statesRes.data) {
                 const states: Record<string, string> = {};
-                let qp = 0;
+                const members: { name: string, state: string }[] = [];
                 const validQuestNames = new Set(questList.map((q: any) => q.name));
 
-                (data as QuestStateRow[]).forEach(row => {
-                    if (!row.quest_name || !validQuestNames.has(row.quest_name)) return;
-                    if (row.state) states[row.quest_name] = row.state;
-                    qp += Number(row.qp_awarded) || 0;
+                (statesRes.data as QuestStateRow[]).forEach(row => {
+                    if (!row.quest_name || row.quest_name === 'Quest Reward') return;
+                    if (validQuestNames.has(row.quest_name)) {
+                        if (row.state) states[row.quest_name] = row.state;
+                    } else if (row.state) {
+                        // Not in the F2P list → members-only quest (states come
+                        // from the QUEST_SNAPSHOT, no P2P data file needed)
+                        members.push({ name: row.quest_name, state: row.state });
+                    }
                 });
 
                 setQuestStates(states);
-                setTotalQP(qp);
+                setMemberQuests(members.sort((a, b) => a.name.localeCompare(b.name)));
             }
+
+            setTotalQP(Number(qpRes.data) || 0);
+            setEverMember(!!(memberRes.data as { is_member: boolean, ever_member: boolean } | null)?.ever_member);
             setIsLoading(false);
         }
 
@@ -147,11 +159,37 @@ export default function QuestsHub() {
                             </div>
                         </div>
 
-                        <div className="flex-1 opacity-50">
+                        <div className={`flex-1 ${everMember ? '' : 'opacity-50'}`}>
                             <h2 className="text-[22px] font-serif text-[#ffffff] border-b border-[#3a3a3a] pb-2 mb-4">Members' Quests</h2>
-                            <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center text-gray-500 italic">
-                                Migrate to P2P to unlock.
-                            </div>
+                            {everMember ? (
+                                <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 flex flex-col gap-2 font-bold font-serif text-[16px]">
+                                    {memberQuests.map(q => {
+                                        const state = q.state || "NOT_STARTED";
+
+                                        if (state === "NOT_STARTED") {
+                                            return (
+                                                <button
+                                                    key={q.name}
+                                                    onClick={() => handleLockedQuestClick(q.name)}
+                                                    className={`${getQuestColor(state)} text-left hover:opacity-75 transition-opacity drop-shadow-md cursor-not-allowed`}
+                                                >
+                                                    {q.name}
+                                                </button>
+                                            );
+                                        }
+
+                                        return (
+                                            <Link key={q.name} href={`/quests/${q.name.replace(/ /g, '_')}`} className={`${getQuestColor(state)} hover:underline drop-shadow-md`}>
+                                                {q.name}
+                                            </Link>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="bg-[#1e1e1e] border border-[#3a3a3a] p-4 text-center text-gray-500 italic">
+                                    Migrate to P2P to unlock.
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}

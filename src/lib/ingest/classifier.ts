@@ -21,6 +21,7 @@ import type {
     ExamineTextPayload,
     QuestStatePayload,
     StatsSnapshotPayload,
+    QuestSnapshotPayload,
     ClassifiedEvent,
     ClassifiedItem,
     CombinedSnapshot,
@@ -210,6 +211,8 @@ export class SessionClassifier {
                 return this.processBankSnapshot(event, event.payload as BankSnapshotPayload);
             case 'STATS_SNAPSHOT':
                 return this.processStatsSnapshot(event, event.payload as StatsSnapshotPayload);
+            case 'QUEST_SNAPSHOT':
+                return this.processQuestSnapshot(event, event.payload as QuestSnapshotPayload);
             default:
                 return [];
         }
@@ -579,7 +582,27 @@ export class SessionClassifier {
                     skillLevels: p.skillLevels,
                     totalLevel: p.totalLevel,
                     combatLevel: p.combatLevel,
+                    membershipDays: p.membershipDays,
+                    memberWorld: p.memberWorld,
                 },
+                note: '',
+            }),
+        ];
+    }
+
+    // -------------------------------------------------------------------------
+    // QUEST_SNAPSHOT — pass-through; the authoritative quest baseline per login
+    // -------------------------------------------------------------------------
+
+    private processQuestSnapshot(event: RawEvent, p: QuestSnapshotPayload): ClassifiedEvent[] {
+        return [
+            this.makeEvent(event, {
+                eventType: 'QUEST_SNAPSHOT',
+                category: 'Quests',
+                source: 'Quest Journal',
+                target: 'None',
+                quests: p.quests,
+                questPoints: p.questPoints,
                 note: '',
             }),
         ];

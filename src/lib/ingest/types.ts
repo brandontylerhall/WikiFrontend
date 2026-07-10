@@ -71,6 +71,19 @@ export interface StatsSnapshotPayload {
     skillLevels: Record<string, number>; // skill name → real (unboosted) level
     totalLevel: number;
     combatLevel: number;
+    membershipDays?: number; // VarPlayer.MEMBERSHIP_DAYS — >0 means currently a member
+    memberWorld?: boolean;   // logged into a members world
+}
+
+export interface QuestSnapshotEntry {
+    id: number;
+    name: string;
+    state: string; // 'NOT_STARTED' | 'IN_PROGRESS' | 'FINISHED'
+}
+
+export interface QuestSnapshotPayload {
+    quests: QuestSnapshotEntry[];
+    questPoints: number;
 }
 
 export type RawEventType =
@@ -82,7 +95,8 @@ export type RawEventType =
     | 'BANK_SNAPSHOT'
     | 'EXAMINE_TEXT'
     | 'QUEST_STATE'
-    | 'STATS_SNAPSHOT';
+    | 'STATS_SNAPSHOT'
+    | 'QUEST_SNAPSHOT';
 
 export interface RawEvent {
     schemaVersion?: string;
@@ -134,6 +148,8 @@ export interface ClassifiedEvent {
     npcLevel?: number;
     items?: ClassifiedItem[];
     stats?: StatsSnapshotPayload; // present on STATS_SNAPSHOT rows only
+    quests?: QuestSnapshotEntry[]; // present on QUEST_SNAPSHOT rows only
+    questPoints?: number;          // present on QUEST_SNAPSHOT rows only
 }
 
 // ---------------------------------------------------------------------------
