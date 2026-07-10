@@ -22,6 +22,8 @@ import type {
     QuestStatePayload,
     StatsSnapshotPayload,
     QuestSnapshotPayload,
+    ChestLootPayload,
+    CollectionLogPayload,
     ClassifiedEvent,
     ClassifiedItem,
     CombinedSnapshot,
@@ -137,6 +139,21 @@ function resolveShopName(candidates: string[], lockedShopTarget: string): string
 
 const COMBAT_SKILLS = new Set(['Attack', 'Strength', 'Defence', 'Ranged', 'Magic', 'Hitpoints']);
 
+/** Boss/raid chests classify as Combat; clue caskets and skilling minigames as Minigame. */
+const COMBAT_CHEST_SOURCES = new Set([
+    'Barrows',
+    'Chambers of Xeric',
+    'Theatre of Blood',
+    'Tombs of Amascut',
+]);
+
+function chestCategory(source: string): string {
+    return COMBAT_CHEST_SOURCES.has(source) ? 'Combat' : 'Minigame';
+}
+
+/** Gains within this many ticks of an empty-items CHEST_LOOT marker are attributed to it. */
+const CHEST_MARKER_WINDOW_TICKS = 3;
+
 // ---------------------------------------------------------------------------
 // Fresh state factory
 // ---------------------------------------------------------------------------
@@ -166,6 +183,8 @@ export function freshSessionState(): SessionState {
         inProgressQuests: [],
         currentTick: 0,
         currentBankItems: [],
+        pendingChestSource: '',
+        pendingChestTick: -999,
     };
 }
 
@@ -180,9 +199,10 @@ export class SessionClassifier {
         this.state = state;
     }
 
-    /** Load from persisted state (or start fresh). */
+    /** Load from persisted state (or start fresh). Fresh defaults are spread
+     *  first so states persisted before newer fields were added stay valid. */
     static rehydrate(state: SessionState | null): SessionClassifier {
-        return new SessionClassifier(state ?? freshSessionState());
+        return new SessionClassifier(state ? {...freshSessionState(), ...state} : freshSessionState());
     }
 
     /** Serialise state back for Supabase upsert. */
@@ -213,6 +233,10 @@ export class SessionClassifier {
                 return this.processStatsSnapshot(event, event.payload as StatsSnapshotPayload);
             case 'QUEST_SNAPSHOT':
                 return this.processQuestSnapshot(event, event.payload as QuestSnapshotPayload);
+            case 'CHEST_LOOT':
+                return this.processChestLoot(event, event.payload as ChestLootPayload);
+            case 'COLLECTION_LOG':
+                return this.processCollectionLog(event, event.payload as CollectionLogPayload);
             default:
                 return [];
         }
@@ -609,6 +633,50 @@ export class SessionClassifier {
     }
 
     // -------------------------------------------------------------------------
+    // CHEST_LOOT — interface-delivered rewards (chests, caskets, minigames)
+    // -------------------------------------------------------------------------
+
+    private processChestLoot(event: RawEvent, p: ChestLootPayload): ClassifiedEvent[] {
+        if (p.items && p.items.length > 0) {
+            // Reward container contents shipped directly — classify immediately.
+            return [
+                this.makeEvent(event, {
+                    eventType: 'CHEST_LOOT',
+                    category: chestCategory(p.source),
+                    source: p.source,
+                    target: 'None',
+                    items: p.items.map((item) => toClassifiedItem(item, item.qty)),
+                    note: '',
+                }),
+            ];
+        }
+
+        // Items-empty marker: attribute upcoming inventory gains (net-diff) to
+        // this source. Each repeated loot message refreshes the window, which
+        // covers multi-tick crate openings.
+        this.state.pendingChestSource = p.source;
+        this.state.pendingChestTick = event.clientTick;
+        return [];
+    }
+
+    // -------------------------------------------------------------------------
+    // COLLECTION_LOG — pass-through; capture-only (no frontend consumer yet).
+    // Item name lives in `note` so item-page queries never pick it up as loot.
+    // -------------------------------------------------------------------------
+
+    private processCollectionLog(event: RawEvent, p: CollectionLogPayload): ClassifiedEvent[] {
+        return [
+            this.makeEvent(event, {
+                eventType: 'COLLECTION_LOG',
+                category: 'System',
+                source: 'Collection Log',
+                target: 'None',
+                note: p.itemName,
+            }),
+        ];
+    }
+
+    // -------------------------------------------------------------------------
     // Net-Diff sub-classifiers
     // -------------------------------------------------------------------------
 
@@ -685,6 +753,22 @@ export class SessionClassifier {
         const shopOpen = tick.widgets.shop;
         const wasDialogueRecently = event.clientTick - this.state.lastDialogueTick <= 3;
         const opt = this.state.lastMenuOption;
+
+        // Most specific first: an active chest-loot marker (empty-items
+        // CHEST_LOOT from Wintertodt/Tempoross/GOTR) claims these gains.
+        if (this.state.pendingChestSource
+            && event.clientTick - this.state.pendingChestTick <= CHEST_MARKER_WINDOW_TICKS) {
+            return [
+                this.makeEvent(event, {
+                    eventType: 'CHEST_LOOT',
+                    category: chestCategory(this.state.pendingChestSource),
+                    source: this.state.pendingChestSource,
+                    target: 'None',
+                    items: gained.map((g) => toClassifiedItem(g.item, g.qty)),
+                    note: '',
+                }),
+            ];
+        }
 
         if (shopOpen) {
             return [

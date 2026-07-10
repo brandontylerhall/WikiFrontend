@@ -102,7 +102,7 @@ export default function IndividualItemPage() {
     const combatSources = sourceStats.filter(stat => stat.category === 'Combat');
     const skillingSources = sourceStats.filter(stat => stat.category === 'Skilling');
     const shopSources = sourceStats.filter(stat => stat.category === 'Shopping');
-    const npcSources = sourceStats.filter(stat => ['NPC Interaction', 'Events & Rewards', 'Miscellaneous'].includes(stat.category));
+    const npcSources = sourceStats.filter(stat => ['NPC Interaction', 'Events & Rewards', 'Miscellaneous', 'Minigame'].includes(stat.category));
 
     const questSources = sourceStats.filter(stat => {
         if (displayTitle === "Quest point" && stat.sourceName === "Quest Reward") return false;

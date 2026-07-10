@@ -86,6 +86,20 @@ export interface QuestSnapshotPayload {
     questPoints: number;
 }
 
+/**
+ * Interface-delivered loot (Barrows/raid chests, clue caskets, minigame rewards).
+ * items non-empty = the reward container contents; items EMPTY = a marker telling
+ * the classifier to attribute the next few ticks of inventory gains to `source`.
+ */
+export interface ChestLootPayload {
+    source: string; // e.g. "Barrows", "Clue Scroll (Elite)", "Reward pool (Tempoross)"
+    items: RawItem[];
+}
+
+export interface CollectionLogPayload {
+    itemName: string;
+}
+
 export type RawEventType =
     | 'TICK'
     | 'MENU_CLICK'
@@ -96,7 +110,9 @@ export type RawEventType =
     | 'EXAMINE_TEXT'
     | 'QUEST_STATE'
     | 'STATS_SNAPSHOT'
-    | 'QUEST_SNAPSHOT';
+    | 'QUEST_SNAPSHOT'
+    | 'CHEST_LOOT'
+    | 'COLLECTION_LOG';
 
 export interface RawEvent {
     schemaVersion?: string;
@@ -197,4 +213,9 @@ export interface SessionState {
     currentTick: number;
 
     currentBankItems: RawItem[];
+
+    // Chest/minigame loot marker (empty-items CHEST_LOOT): inventory gains within
+    // a few ticks of pendingChestTick are attributed to pendingChestSource.
+    pendingChestSource: string;
+    pendingChestTick: number;
 }
